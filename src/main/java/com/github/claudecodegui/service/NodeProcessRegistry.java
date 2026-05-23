@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Project-scoped service that aggregates all Node.js subprocess data for the
@@ -212,18 +213,19 @@ public final class NodeProcessRegistry implements Disposable {
         }
 
         final long scanDeadline = System.currentTimeMillis() + ORPHAN_SCAN_BUDGET_MS;
-        // One-element array so the forEach lambda can mutate it (effectively-final restriction)
-        final boolean[] timedOut = {false};
+        // AtomicBoolean so the forEach lambda can mutate it (effectively-final restriction).
+        // Checkstyle forbids single-element arrays for this purpose.
+        final AtomicBoolean timedOut = new AtomicBoolean(false);
         try {
             ProcessHandle.allProcesses().forEach(handle -> {
-                if (timedOut[0]) {
+                if (timedOut.get()) {
                     // Lambda return only skips the current element, but subsequent
                     // iterations will hit this guard within microseconds — cheaper
                     // than throwing or short-circuiting via takeWhile.
                     return;
                 }
                 if (System.currentTimeMillis() > scanDeadline) {
-                    timedOut[0] = true;
+                    timedOut.set(true);
                     return;
                 }
                 long pid = handle.pid();
@@ -258,7 +260,7 @@ public final class NodeProcessRegistry implements Disposable {
                         .command(fingerprint)
                         .build());
             });
-            if (timedOut[0]) {
+            if (timedOut.get()) {
                 LOG.warn("[NodeProcessRegistry] Orphan scan exceeded " + ORPHAN_SCAN_BUDGET_MS
                         + "ms budget; returning partial results. Some orphans may not be listed.");
             }
