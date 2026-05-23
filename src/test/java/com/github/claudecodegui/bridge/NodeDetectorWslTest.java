@@ -52,6 +52,16 @@ public class NodeDetectorWslTest {
     }
 
     @Test
+    public void convertToWslPath_uncForwardSlashWsl_stripsPrefix() {
+        // IntelliJ's project.getBasePath() normalizes UNC paths to forward slashes
+        // when the project lives on the WSL filesystem (e.g. opened via \\wsl.localhost\Ubuntu\...).
+        assertEquals("/home/gazoon007/wfi/jetbrains-cc-gui",
+                NodeDetector.convertToWslPath("//wsl.localhost/Ubuntu/home/gazoon007/wfi/jetbrains-cc-gui"));
+        assertEquals("/home/user",
+                NodeDetector.convertToWslPath("//wsl$/Ubuntu/home/user"));
+    }
+
+    @Test
     public void convertToWslPath_nullOrEmpty_returnsInput() {
         assertEquals(null, NodeDetector.convertToWslPath(null));
         assertEquals("", NodeDetector.convertToWslPath(""));

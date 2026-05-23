@@ -684,14 +684,11 @@ public class NodeDetector {
         if (windowsPath == null || windowsPath.isEmpty()) {
             return windowsPath;
         }
-        // Already a Unix path
-        if (windowsPath.charAt(0) == '/') {
-            return windowsPath;
-        }
-        // UNC WSL path: \\wsl.localhost\<distro>\<path> or \\wsl$\<distro>\<path>
-        if (windowsPath.startsWith("\\\\wsl")) {
-            // Strip the \\<host>\<distro> prefix and keep the path inside the distro.
-            // normalized: //wsl.localhost/Ubuntu/home/... or //wsl$/Ubuntu/home/...
+        // UNC WSL path: \\wsl.localhost\<distro>\<path>, \\wsl$\<distro>\<path>,
+        // or their forward-slash forms (IntelliJ's project.getBasePath() returns
+        // forward slashes when the project lives on the WSL filesystem).
+        // Checked before the "already Unix" guard so //wsl.localhost/... is stripped.
+        if (windowsPath.startsWith("\\\\wsl") || windowsPath.startsWith("//wsl")) {
             String normalized = windowsPath.replace('\\', '/');
             int distroNameStart = normalized.indexOf('/', 2);        // index of '/' before <distro>
             if (distroNameStart > 0) {
@@ -700,6 +697,10 @@ public class NodeDetector {
                     return normalized.substring(distroPathStart);    // /home/...
                 }
             }
+        }
+        // Already a Unix path
+        if (windowsPath.charAt(0) == '/') {
+            return windowsPath;
         }
         // Drive letter path: C:\Users\... -> /mnt/c/Users/...
         if (windowsPath.length() >= 2 && windowsPath.charAt(1) == ':') {
