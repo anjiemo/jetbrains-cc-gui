@@ -575,6 +575,51 @@ public class NodeDetector {
     private static volatile String cachedWslHomeUncPath = null;
 
     /**
+     * Converts a WSL absolute path (e.g. {@code /home/gazoon007/file.js}) to its Windows UNC form
+     * so the Windows JVM can read WSL filesystem files. Returns {@code null} on non-Windows,
+     * when WSL is unavailable, or when the input is not an absolute Linux path.
+     */
+    public static String convertWslPathToWindowsUnc(String wslPath) {
+        if (!PlatformUtils.isWindows() || wslPath == null || wslPath.isEmpty()) {
+            return null;
+        }
+        if (wslPath.charAt(0) != '/') {
+            return null;
+        }
+        String distroRoot = resolveWslDistroRootUnc();
+        if (distroRoot == null) {
+            return null;
+        }
+        // distroRoot ends with a single trailing backslash; the wslPath starts with '/'.
+        // Replace '/' with '\' on the WSL portion and append after the distro root,
+        // taking care not to double the separator.
+        String windowsTail = wslPath.replace('/', '\\');
+        if (windowsTail.startsWith("\\")) {
+            windowsTail = windowsTail.substring(1);
+        }
+        return distroRoot + windowsTail;
+    }
+
+    /**
+     * Returns the {@code \\wsl.localhost\<distro>\} (or {@code \\wsl$\<distro>\})
+     * prefix for the running user's default WSL distro, including a trailing
+     * backslash. Derived once from {@link #resolveWslHomeUncPath()}.
+     */
+    private static String resolveWslDistroRootUnc() {
+        String uncHome = resolveWslHomeUncPath();
+        if (uncHome == null) {
+            return null;
+        }
+        // uncHome looks like \\wsl.localhost\Ubuntu\home\gazoon007 — split on
+        // backslashes; the empty leading elements come from the leading "\\".
+        String[] parts = uncHome.split("\\\\");
+        if (parts.length < 4 || parts[2].isEmpty() || parts[3].isEmpty()) {
+            return null;
+        }
+        return "\\\\" + parts[2] + "\\" + parts[3] + "\\";
+    }
+
+    /**
      * Returns the Windows UNC path to the WSL user's home directory
      * (e.g. {@code \\wsl.localhost\Ubuntu\home\gazoon007}).
      *

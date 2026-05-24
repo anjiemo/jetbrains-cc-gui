@@ -10,6 +10,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -159,6 +160,36 @@ public class NodeDetectorWslTest {
         List<String> cmd = NodeDetector.buildNodeInlineCommand("node", "1+1");
         cmd.add("extra");
         assertEquals(4, cmd.size());
+    }
+
+    // =========================================================================
+    // convertWslPathToWindowsUnc
+    // =========================================================================
+
+    @Test
+    public void convertWslPathToWindowsUnc_nullInput_returnsNull() {
+        assertNull(NodeDetector.convertWslPathToWindowsUnc(null));
+    }
+
+    @Test
+    public void convertWslPathToWindowsUnc_emptyInput_returnsNull() {
+        assertNull(NodeDetector.convertWslPathToWindowsUnc(""));
+    }
+
+    @Test
+    public void convertWslPathToWindowsUnc_relativePathNoLeadingSlash_returnsNull() {
+        assertNull(NodeDetector.convertWslPathToWindowsUnc("home/user/file.js"));
+    }
+
+    @Test
+    public void convertWslPathToWindowsUnc_onWindowsWithWsl_returnsUncPath() {
+        Assume.assumeTrue("Skipped: not running on Windows", System.getProperty("os.name", "").toLowerCase().contains("windows"));
+
+        String result = NodeDetector.convertWslPathToWindowsUnc("/home/gazoon007/file.js");
+        Assume.assumeTrue("Skipped: WSL not available", result != null);
+
+        assertTrue("UNC path must start with \\\\", result.startsWith("\\\\"));
+        assertTrue("UNC path must contain the WSL path tail", result.endsWith("home\\gazoon007\\file.js"));
     }
 
     // =========================================================================

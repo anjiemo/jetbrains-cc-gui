@@ -1,5 +1,6 @@
 package com.github.claudecodegui.handler.file;
 
+import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.handler.core.HandlerContext;
 
 import com.github.claudecodegui.util.EditorFileUtils;
@@ -149,6 +150,21 @@ class OpenFileHandler {
 
         String resolvedPath = actualPath;
         if (PlatformUtils.isWindows()) {
+            // WSL must be tried before the MSYS conversion below: under MSYS
+            // /home/<user> means %USERPROFILE%, under WSL it's a real Linux dir
+            // accessible only via \\wsl.localhost\<distro>\home\<user>.
+            // Falling through to MSYS would silently rewrite the path to the
+            // Windows home, which usually has no such file → "file does not exist".
+            String wslUncPath = NodeDetector.convertWslPathToWindowsUnc(actualPath);
+            if (wslUncPath != null) {
+                File wslFile = normalizeExistingFile(new File(wslUncPath));
+                if (wslFile != null) {
+                    LOG.info("Resolved WSL path to UNC: " + wslUncPath);
+                    warnIfOutsideProjectRoot(wslFile);
+                    return new FileResolutionResult(wslFile, null);
+                }
+            }
+
             String convertedPath = PathUtils.convertMsysToWindowsPath(actualPath);
             if (!convertedPath.equals(actualPath)) {
                 LOG.info("Detected MSYS2 path, converted to Windows path: " + convertedPath);

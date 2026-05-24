@@ -24,6 +24,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 import { createInterface } from 'readline';
 import { handleClaudeCommand } from './channels/claude-channel.js';
 import { handleCodexCommand } from './channels/codex-channel.js';
@@ -39,31 +40,6 @@ import {
 } from './services/claude/persistent-query-service.js';
 import { injectNetworkEnvVars } from './config/api-config.js';
 import { cleanupStaleTempImages } from './services/claude/attachment-service.js';
-
-// =============================================================================
-// WSL Login PATH Fix (must run before any subprocess spawns)
-// =============================================================================
-
-// The daemon is launched by the plugin via `wsl node daemon.js`, which
-// inherits only a minimal system PATH — no ~/.cargo/bin, ~/.local/bin, nvm,
-// etc. Fix it once here so every subprocess this daemon spawns (Claude Bash
-// tool, Codex, MCP servers, any future tool) automatically inherits the
-// user's full login PATH without any Java-side probing that could freeze the IDE.
-if (process.platform === 'linux' && !process.env.__AI_BRIDGE_PATH_PROBED) {
-  try {
-    const loginPath = execFileSync('bash', ['-lc', 'printf %s "$PATH"'], {
-      timeout: 3000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    if (loginPath && loginPath.includes('/home/')) {
-      process.env.PATH = loginPath;
-    }
-  } catch {
-    // bash -lc failed or timed out; keep whatever PATH wsl gave us.
-  }
-  process.env.__AI_BRIDGE_PATH_PROBED = '1';
-}
 
 // =============================================================================
 // Network Environment Setup (must run before any HTTPS connection)
@@ -104,6 +80,90 @@ const _originalStdoutWrite = process.stdout.write.bind(process.stdout);
 const _originalStderrWrite = process.stderr.write.bind(process.stderr);
 const _originalConsoleLog = console.log.bind(console);
 const _originalConsoleError = console.error.bind(console);
+
+// =============================================================================
+// GUI Login Environment Fix (must run before any subprocess spawns)
+// =============================================================================
+//
+// GUI-launched IDEs (JetBrains via WSL on Windows, Dock-launched on macOS)
+// don't source the user's shell init files, so the daemon inherits a minimal
+// system PATH. Probe the user's login shell once at startup and apply a
+// whitelist of runtime env vars so every subprocess this daemon spawns —
+// Claude's Bash tool, Codex, MCP servers, any future tool — automatically
+// sees the user's full environment without per-tool Java-side patches.
+
+if (process.platform !== 'win32' && !process.env.__AI_BRIDGE_ENV_PROBED) {
+  // PATH is critical; runtime homes let tools resolve config/data dirs correctly
+  const VARS_TO_INHERIT = new Set([
+    'PATH',
+    'NVM_DIR',
+    'PYENV_ROOT',
+    'RUSTUP_HOME', 'CARGO_HOME',
+    'GOPATH', 'GOROOT',
+    'JAVA_HOME',
+    'SDKMAN_DIR', 'RBENV_ROOT',
+  ]);
+
+  const loginShell = process.env.SHELL || '/bin/bash';
+  const shellBase = path.basename(loginShell);
+  // fish reads config.fish by default; all other POSIX shells need -l for login profile
+  const loginFlag = shellBase === 'fish' ? '-c' : '-lc';
+
+  const tryProbeEnv = (shell, flag) => {
+    try {
+      return execFileSync(shell, [flag, 'env -0'], {
+        timeout: 3000,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  let raw = tryProbeEnv(loginShell, loginFlag);
+  let probeSource = raw ? loginShell : null;
+
+  if (!raw && loginShell !== '/bin/bash') {
+    raw = tryProbeEnv('/bin/bash', '-lc');
+    if (raw) probeSource = '/bin/bash';
+  }
+
+  let applied = 0;
+  if (raw) {
+    const home = process.env.HOME || '';
+    for (const entry of raw.split('\0')) {
+      const eqIdx = entry.indexOf('=');
+      if (eqIdx < 1) continue;
+      const key = entry.slice(0, eqIdx);
+      if (!VARS_TO_INHERIT.has(key)) continue;
+      const val = entry.slice(eqIdx + 1);
+      // Reject a PATH that contains no user-home entries — it's likely a system-only
+      // shell that failed silently and returned a minimal env
+      if (key === 'PATH' && home && !val.includes(home)) continue;
+      if (val !== process.env[key]) {
+        process.env[key] = val;
+        applied++;
+      }
+    }
+  }
+
+  process.env.__AI_BRIDGE_ENV_PROBED = '1';
+  _originalStderrWrite(
+    `[daemon] env probe: shell=${probeSource ?? 'none'} vars-applied=${applied}\n`,
+    'utf8',
+  );
+}
+
+// One-shot diagnostic: confirms WSLENV-propagated vars actually reached the daemon.
+// If CLAUDE_PERMISSION_DIR shows up as `unset` here while Java logs claim to have
+// set it, WSLENV is not being honored and the permission bridge will hang.
+_originalStderrWrite(
+  `[daemon] bridge env: CLAUDE_PERMISSION_DIR=${process.env.CLAUDE_PERMISSION_DIR ?? 'unset'}`
+  + ` CLAUDE_SESSION_ID=${process.env.CLAUDE_SESSION_ID ?? 'unset'}`
+  + ` WSLENV=${process.env.WSLENV ?? 'unset'}\n`,
+  'utf8',
+);
 
 /**
  * Write a raw NDJSON line to stdout (bypasses interception).
