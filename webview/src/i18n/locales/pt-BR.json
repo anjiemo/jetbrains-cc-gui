@@ -1463,7 +1463,7 @@
       },
       "opus46": {
         "label": "Opus 4.7",
-        "description": "Opus 4.7 · O mais recente e capaz"
+        "description": "Opus 4.7 · Modelo principal anterior"
       },
       "opus46_1m": {
         "label": "Opus 4.6",
@@ -1472,6 +1472,10 @@
       "haiku45": {
         "label": "Haiku 4.5",
         "description": "Haiku 4.5 · Mais rápido para respostas rápidas"
+      },
+      "opus48": {
+        "label": "Opus 4.8",
+        "description": "Opus 4.8 · O mais recente e capaz"
       }
     },
     "longContext": {

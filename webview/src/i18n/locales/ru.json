@@ -1317,7 +1317,7 @@
       },
       "opus46": {
         "label": "Opus 4.7",
-        "description": "Opus 4.7 · Новейшая и самая мощная"
+        "description": "Opus 4.7 · Предыдущая флагманская модель"
       },
       "opus46_1m": {
         "label": "Opus 4.6",
@@ -1326,6 +1326,10 @@
       "haiku45": {
         "label": "Haiku 4.5",
         "description": "Haiku 4.5 · Самая быстрая для быстрых ответов"
+      },
+      "opus48": {
+        "label": "Opus 4.8",
+        "description": "Opus 4.8 · Новейшая и самая мощная"
       }
     },
     "longContext": {
