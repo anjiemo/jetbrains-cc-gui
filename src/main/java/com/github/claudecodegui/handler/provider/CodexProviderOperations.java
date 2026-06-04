@@ -165,11 +165,19 @@ public class CodexProviderOperations {
             JsonObject data = GSON.fromJson(content, JsonObject.class);
             String id = data.get("id").getAsString();
 
+            // Handle Codex CLI Login virtual provider
+            if (com.github.claudecodegui.settings.CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(id)) {
+                handleSwitchToCodexCliLogin();
+                return;
+            }
+
             context.getSettingsService().switchCodexProvider(id);
             context.getSettingsService().applyActiveProviderToCodexSettings();
 
             ApplicationManager.getApplication().invokeLater(() -> {
-                context.callJavaScript("window.showSwitchSuccess", context.escapeJs(com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchSuccess") + com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("provider.switchSyncCodex")));
+                String successMsg = com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchSuccess")
+                        + com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("provider.switchSyncCodex");
+                context.callJavaScript("window.showSwitchSuccess", context.escapeJs(successMsg));
                 handleGetCodexProviders(); // Refresh provider list
                 handleGetCurrentCodexConfig(); // Refresh Codex CLI config display
                 handleGetActiveCodexProvider(); // Refresh active provider config
@@ -178,6 +186,80 @@ public class CodexProviderOperations {
             LOG.error("[ProviderHandler] Failed to switch Codex provider: " + e.getMessage(), e);
             ApplicationManager.getApplication().invokeLater(() -> {
                 context.callJavaScript("window.showError", context.escapeJs(com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchFailed") + ": " + e.getMessage()));
+            });
+        }
+    }
+
+    /**
+     * Revoke local Codex config authorization and stop reading ~/.codex/{config.toml,auth.json}.
+     */
+    public void handleRevokeCodexLocalConfigAuthorization(String content) {
+        try {
+            JsonObject data = content == null || content.isBlank()
+                    ? new JsonObject()
+                    : GSON.fromJson(content, JsonObject.class);
+            String fallbackProviderId = data != null && data.has("fallbackProviderId")
+                    && !data.get("fallbackProviderId").isJsonNull()
+                    ? data.get("fallbackProviderId").getAsString()
+                    : "";
+
+            JsonObject activeProvider = context.getSettingsService().getActiveCodexProvider();
+            boolean wasCliLoginActive = activeProvider != null
+                    && activeProvider.has("id")
+                    && com.github.claudecodegui.settings.CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID
+                    .equals(activeProvider.get("id").getAsString());
+
+            context.getSettingsService().setCodexLocalConfigAuthorized(false);
+
+            if (wasCliLoginActive) {
+                context.getSettingsService().switchCodexProvider(fallbackProviderId);
+                if (fallbackProviderId != null && !fallbackProviderId.isBlank()) {
+                    context.getSettingsService().applyActiveProviderToCodexSettings();
+                }
+            }
+
+            ApplicationManager.getApplication().invokeLater(() -> {
+                context.callJavaScript("window.showSwitchSuccess", context.escapeJs(
+                        com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.codexLocalConfigAuthorizationRevoked")));
+                handleGetCodexProviders();
+                handleGetCurrentCodexConfig();
+                handleGetActiveCodexProvider();
+            });
+        } catch (Exception e) {
+            LOG.error("[ProviderHandler] Failed to revoke Codex local config authorization: " + e.getMessage(), e);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                context.callJavaScript("window.showError", context.escapeJs(
+                        com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchFailed") + ": " + e.getMessage()));
+            });
+        }
+    }
+
+    /**
+     * Handle switching to authorized local Codex config mode.
+     * This grants read access to ~/.codex/config.toml and auth.json without modifying them.
+     */
+    private void handleSwitchToCodexCliLogin() {
+        try {
+            context.getSettingsService().setCodexLocalConfigAuthorized(true);
+
+            // Update config.json to set CLI login as current
+            context.getSettingsService().switchCodexProvider(
+                    com.github.claudecodegui.settings.CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID);
+
+            LOG.info("[ProviderHandler] Authorized local Codex config provider");
+
+            ApplicationManager.getApplication().invokeLater(() -> {
+                context.callJavaScript("window.showSwitchSuccess", context.escapeJs(
+                        com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.codexCliLoginSwitchSuccess")));
+                handleGetCodexProviders();
+                handleGetCurrentCodexConfig();
+                handleGetActiveCodexProvider();
+            });
+        } catch (Exception e) {
+            LOG.error("[ProviderHandler] Failed to switch to Codex CLI login: " + e.getMessage(), e);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                context.callJavaScript("window.showError", context.escapeJs(
+                        com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchFailed") + ": " + e.getMessage()));
             });
         }
     }

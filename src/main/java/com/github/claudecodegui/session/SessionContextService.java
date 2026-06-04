@@ -1,12 +1,12 @@
 package com.github.claudecodegui.session;
 
-import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.service.RunConfigMonitorService;
 import com.github.claudecodegui.terminal.TerminalMonitorService;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Computable;
 
@@ -71,6 +71,8 @@ public class SessionContextService {
             LOG.info("[ClaudeSession] Created user message: content="
                     + (userDisplayText.length() > 50 ? userDisplayText.substring(0, 50) + "..." : userDisplayText)
                     + ", hasRaw=true, contentBlocks=" + contentArr.size());
+        } catch (ProcessCanceledException e) {
+            throw e;
         } catch (Exception e) {
             LOG.warn("Failed to build user message raw: " + e.getMessage());
         }
@@ -81,6 +83,67 @@ public class SessionContextService {
     public String buildCodexContextAppend(JsonObject openedFilesJson, List<String> fileTagPaths) {
         StringBuilder sb = new StringBuilder();
         boolean hasContent = false;
+
+        // 0. Workspace/Multi-project context (highest priority for project structure understanding)
+        if (openedFilesJson != null && openedFilesJson.has("isWorkspace")
+                && openedFilesJson.get("isWorkspace").getAsBoolean()) {
+            sb.append("\n\n## Workspace Context\n\n");
+            sb.append("You are working in a multi-project workspace environment.\n\n");
+
+            if (openedFilesJson.has("workspaceRoot")) {
+                sb.append("Workspace root: `").append(openedFilesJson.get("workspaceRoot").getAsString()).append("`\n\n");
+            }
+
+            if (openedFilesJson.has("subprojects")) {
+                JsonArray subprojects = openedFilesJson.getAsJsonArray("subprojects");
+                sb.append("Subprojects in this workspace:\n");
+                for (int i = 0; i < subprojects.size(); i++) {
+                    JsonObject sp = subprojects.get(i).getAsJsonObject();
+                    String name = sp.has("name") ? sp.get("name").getAsString() : "unknown";
+                    String path = sp.has("path") ? sp.get("path").getAsString() : "";
+                    String type = sp.has("type") ? sp.get("type").getAsString() : "";
+                    // Match the JS-side default in system-prompts.js: missing means loaded.
+                    boolean loaded = !sp.has("loaded") || sp.get("loaded").getAsBoolean();
+
+                    sb.append("- **").append(name).append("**");
+                    if (!type.isEmpty()) {
+                        sb.append(" (").append(type).append(")");
+                    }
+                    if (!loaded) {
+                        sb.append(" [not loaded]");
+                    }
+                    sb.append(": `").append(path).append("`\n");
+                }
+                sb.append("\n");
+            }
+
+            if (openedFilesJson.has("activeSubproject")) {
+                sb.append("The current file belongs to subproject: **")
+                    .append(openedFilesJson.get("activeSubproject").getAsString())
+                    .append("**\n\n");
+            }
+
+            sb.append("When working with files, consider which subproject they belong to. ")
+                .append("Each subproject may have its own build configuration, dependencies, and codebase structure.\n");
+            hasContent = true;
+        }
+
+        // Also show module info for single projects with multiple modules
+        if (openedFilesJson != null && openedFilesJson.has("modules")) {
+            JsonArray modules = openedFilesJson.getAsJsonArray("modules");
+            if (modules.size() > 1 && (!openedFilesJson.has("isWorkspace")
+                    || !openedFilesJson.get("isWorkspace").getAsBoolean())) {
+                sb.append("\n\n## Project Modules\n\n");
+                sb.append("This project contains multiple modules:\n");
+                for (int i = 0; i < modules.size(); i++) {
+                    JsonObject mod = modules.get(i).getAsJsonObject();
+                    String name = mod.has("name") ? mod.get("name").getAsString() : "unknown";
+                    sb.append("- `").append(name).append("`\n");
+                }
+                sb.append("\n");
+                hasContent = true;
+            }
+        }
 
         List<String> terminalPaths = new ArrayList<>();
         List<String> regularFilePaths = new ArrayList<>();
@@ -257,6 +320,8 @@ public class SessionContextService {
                     }
                 }
                 LOG.debug("[Terminal] No matching terminal found for: " + safeName);
+            } catch (ProcessCanceledException e) {
+                throw e;
             } catch (Exception e) {
                 LOG.error("[Terminal] Error resolving terminal content: " + e.getMessage(), e);
             }
@@ -288,6 +353,8 @@ public class SessionContextService {
                     }
                 }
                 LOG.debug("[Service] No matching service found for: " + safeName);
+            } catch (ProcessCanceledException e) {
+                throw e;
             } catch (Exception e) {
                 LOG.error("[Service] Error resolving service content: " + e.getMessage(), e);
             }

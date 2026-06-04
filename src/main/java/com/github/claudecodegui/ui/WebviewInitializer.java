@@ -9,6 +9,7 @@ import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.startup.BridgePreloader;
 import com.github.claudecodegui.util.FontConfigService;
 import com.github.claudecodegui.util.HtmlLoader;
+import com.github.claudecodegui.util.JsUtils;
 import com.github.claudecodegui.util.JBCefBrowserFactory;
 import com.github.claudecodegui.util.LanguageConfigService;
 import com.github.claudecodegui.util.PlatformUtils;
@@ -18,12 +19,14 @@ import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.ui.jcef.JBCefBrowser;
 import com.intellij.ui.jcef.JBCefBrowserBase;
 import com.intellij.ui.jcef.JBCefJSQuery;
 import org.cef.browser.CefBrowser;
 import org.cef.browser.CefFrame;
 import org.cef.handler.CefLoadHandlerAdapter;
+import org.jetbrains.annotations.NotNull;
 
 import javax.swing.*;
 import java.awt.*;
@@ -72,26 +75,6 @@ public class WebviewInitializer {
     }
 
     /**
-     * If an ai-bridge directory exists under the project root, prefer using it.
-     */
-    public void overrideBridgePathIfAvailable() {
-        try {
-            String basePath = host.getProject().getBasePath();
-            if (basePath == null) return;
-            File bridgeDir = new File(basePath, "ai-bridge");
-            File channelManager = new File(bridgeDir, "channel-manager.js");
-            if (bridgeDir.exists() && bridgeDir.isDirectory() && channelManager.exists()) {
-                host.getClaudeSDKBridge().setSdkTestDir(bridgeDir.getAbsolutePath());
-                LOG.info("Overriding ai-bridge path to project directory: " + bridgeDir.getAbsolutePath());
-            } else {
-                LOG.info("Project ai-bridge not found, using default resolver");
-            }
-        } catch (Exception e) {
-            LOG.warn("Failed to override bridge path: " + e.getMessage());
-        }
-    }
-
-    /**
      * Create and configure UI components (browser, JS bridge, drag-and-drop).
      */
     public void createUIComponents() {
@@ -110,7 +93,7 @@ public class WebviewInitializer {
                 if (ready) {
                     reinitializeAfterExtraction();
                 } else {
-                    ApplicationManager.getApplication().invokeLater(this::showErrorPanel);
+                    invokeLaterForToolWindow(this::showErrorPanel);
                 }
             });
             return;
@@ -150,7 +133,7 @@ public class WebviewInitializer {
                     if (ready) {
                         reinitializeAfterExtraction();
                     } else {
-                        ApplicationManager.getApplication().invokeLater(this::showErrorPanel);
+                        invokeLaterForToolWindow(this::showErrorPanel);
                     }
                 });
                 return;
@@ -195,6 +178,11 @@ public class WebviewInitializer {
             JBCefBrowser browser = JBCefBrowserFactory.create();
             host.setBrowser(browser);
             host.getHandlerContext().setBrowser(browser);
+
+            browser.getJBCefClient().addRequestHandler(
+                    new UiFontResourceRequestHandler(),
+                    browser.getCefBrowser()
+            );
 
             JBCefBrowserBase browserBase = browser;
             JBCefJSQuery jsQuery = JBCefJSQuery.create(browserBase);
@@ -288,8 +276,34 @@ public class WebviewInitializer {
                     cefBrowser.executeJavaScript(fontConfigInjection, cefBrowser.getURL(), 0);
                     LOG.info("[FontSync] Font config injected into frontend");
 
+                    // Pass effective plugin UI font configuration to the frontend
+                    String uiFontConfig = FontConfigService.getResolvedUiFontConfigJson(host.getHandlerContext().getSettingsService());
+                    LOG.info("[UiFontSync] Retrieved UI font config");
+                    String escapedUiFontConfig = JsUtils.escapeJs(uiFontConfig);
+                    String uiFontConfigInjection = String.format(
+                        "(function(){ var c = JSON.parse('%s'); " +
+                        "if (window.applyUiFontConfig) { window.applyUiFontConfig(c); } " +
+                        "else { window.__pendingUiFontConfig = c; } })()",
+                        escapedUiFontConfig
+                    );
+                    cefBrowser.executeJavaScript(uiFontConfigInjection, cefBrowser.getURL(), 0);
+                    LOG.info("[UiFontSync] UI font config injected into frontend");
+
+                    // Pass effective code font configuration to the frontend
+                    String codeFontConfig = FontConfigService.getResolvedCodeFontConfigJson(host.getHandlerContext().getSettingsService());
+                    LOG.info("[CodeFontSync] Retrieved code font config");
+                    String escapedCodeFontConfig = JsUtils.escapeJs(codeFontConfig);
+                    String codeFontConfigInjection = String.format(
+                        "(function(){ var c = JSON.parse('%s'); " +
+                        "if (window.applyCodeFontConfig) { window.applyCodeFontConfig(c); } " +
+                        "else { window.__pendingCodeFontConfig = c; } })()",
+                        escapedCodeFontConfig
+                    );
+                    cefBrowser.executeJavaScript(codeFontConfigInjection, cefBrowser.getURL(), 0);
+                    LOG.info("[CodeFontSync] Code font config injected into frontend");
+
                     // Pass IDEA language configuration to the frontend
-                    String languageConfig = LanguageConfigService.getLanguageConfigJson();
+                    String languageConfig = LanguageConfigService.getLanguageConfigJson(host.getHandlerContext().getSettingsService());
                     LOG.info("[LanguageSync] Retrieved language config: " + languageConfig);
                     String languageConfigInjection = String.format(
                         "if (window.applyIdeaLanguageConfig) { window.applyIdeaLanguageConfig(%s); } " +
@@ -298,30 +312,6 @@ public class WebviewInitializer {
                     );
                     cefBrowser.executeJavaScript(languageConfigInjection, cefBrowser.getURL(), 0);
                     LOG.info("[LanguageSync] Language config injected into frontend");
-
-                    // Fix cursor display in JCEF on macOS: track CSS cursor changes via JS
-                    // and send them to Java through the bridge. JCEF native rendering on macOS
-                    // does not propagate CSS cursor styles to the host Swing component.
-                    String cursorTracker =
-                        "(function() {"
-                        + "  var lastCursor = '';"
-                        + "  var pending = false;"
-                        + "  document.addEventListener('mousemove', function(e) {"
-                        + "    if (pending) return;"
-                        + "    pending = true;"
-                        + "    requestAnimationFrame(function() {"
-                        + "      pending = false;"
-                        + "      var c = window.getComputedStyle(e.target).cursor;"
-                        + "      if (c !== lastCursor) {"
-                        + "        lastCursor = c;"
-                        + "        if (window.sendToJava) {"
-                        + "          window.sendToJava('cursor_change:' + c);"
-                        + "        }"
-                        + "      }"
-                        + "    });"
-                        + "  }, {passive: true});"
-                        + "})();";
-                    cefBrowser.executeJavaScript(cursorTracker, cefBrowser.getURL(), 0);
 
                     LOG.debug("onLoadEnd completed, waiting for frontend_ready signal");
                 }
@@ -484,11 +474,20 @@ public class WebviewInitializer {
         LOG.info("[ClaudeSDKToolWindow] Showing loading panel while bridge extracts...");
     }
 
+    private void invokeLaterForToolWindow(@NotNull Runnable runnable) {
+        Project project = this.host.getProject();
+        if (project != null && !project.isDisposed()) {
+            ToolWindowManager.getInstance(project).invokeLater(runnable);
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(runnable);
+    }
+
     /**
      * Reinitialize UI after bridge extraction completes.
      */
     private void reinitializeAfterExtraction() {
-        ApplicationManager.getApplication().invokeLater(() -> {
+        invokeLaterForToolWindow(() -> {
             LOG.info("[ClaudeSDKToolWindow] Bridge extraction complete, reinitializing UI...");
             JPanel mainPanel = host.getMainPanel();
             mainPanel.removeAll();
@@ -507,7 +506,7 @@ public class WebviewInitializer {
 
         if (attempt >= MAX_RETRIES) {
             LOG.warn("[ClaudeSDKToolWindow] All " + MAX_RETRIES + " retry attempts failed after extraction completion");
-            ApplicationManager.getApplication().invokeLater(this::showErrorPanel);
+            invokeLaterForToolWindow(this::showErrorPanel);
             return;
         }
 
@@ -521,7 +520,7 @@ public class WebviewInitializer {
                 Thread.currentThread().interrupt();
             }
         }).thenRun(() -> {
-            ApplicationManager.getApplication().invokeLater(() -> {
+            invokeLaterForToolWindow(() -> {
                 if (host.getClaudeSDKBridge().checkEnvironment()) {
                     LOG.info("[ClaudeSDKToolWindow] Retry attempt " + (attempt + 1) + " succeeded after extraction completion");
                     reinitializeAfterExtraction();
@@ -578,7 +577,7 @@ public class WebviewInitializer {
                 }
             }
 
-            ApplicationManager.getApplication().invokeLater(() -> {
+            invokeLaterForToolWindow(() -> {
                 mainPanel.removeAll();
                 createUIComponents();
                 mainPanel.revalidate();
@@ -597,7 +596,7 @@ public class WebviewInitializer {
      */
     public void reloadWebview(String reason) {
         ApplicationManager.getApplication().invokeLater(() -> {
-            if (host.isDisposed()) return;
+            if (host.isDisposed()) { return; }
             JBCefBrowser browser = host.getBrowser();
             if (browser == null) {
                 recreateWebview(reason + "_no_browser");
@@ -619,7 +618,7 @@ public class WebviewInitializer {
      */
     public void recreateWebview(String reason) {
         ApplicationManager.getApplication().invokeLater(() -> {
-            if (host.isDisposed()) return;
+            if (host.isDisposed()) { return; }
 
             host.setFrontendReady(false);
             JPanel mainPanel = host.getMainPanel();

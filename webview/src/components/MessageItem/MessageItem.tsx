@@ -4,6 +4,8 @@ import type { ClaudeMessage, ClaudeContentBlock, ToolResultBlock } from '../../t
 
 import MarkdownBlock from '../MarkdownBlock';
 import { ProviderNotConfiguredCard, isProviderNotConfiguredError } from './ProviderNotConfiguredCard';
+import { ErrorDiagnosticCard } from './ErrorDiagnosticCard';
+import { matchErrorPattern } from '../../utils/errorMatcher';
 import {
   EditToolBlock,
   EditToolGroupBlock,
@@ -32,6 +34,16 @@ export interface MessageItemProps {
   extractMarkdownContent: (message: ClaudeMessage) => string;
   onNodeRef?: (id: string, node: HTMLDivElement | null) => void;
   onNavigateToProviderSettings?: () => void;
+  onNavigateToDependencySettings?: () => void;
+  toolResultSignature?: string;
+  /** Current active provider id (e.g. 'claude', 'codex'); drives the streaming-connect label. */
+  currentProvider?: string;
+}
+
+/** Map provider id to a human-readable label used in UI text. */
+function getProviderDisplayName(providerId?: string): string {
+  if (providerId === 'codex') return 'Codex';
+  return 'Claude';
 }
 
 type GroupedBlock =
@@ -79,6 +91,17 @@ const CopyButton = memo(function CopyButton({
     </button>
   );
 });
+
+function formatDurationMs(durationMs: number): string {
+  const seconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(remainder).padStart(2, '0')}`;
+}
 
 function isToolBlockOfType(block: ClaudeContentBlock, toolNames: Set<string>): boolean {
   return block.type === 'tool_use' && isToolName(block.name, toolNames);
@@ -207,6 +230,9 @@ export const MessageItem = memo(function MessageItem({
   extractMarkdownContent,
   onNodeRef,
   onNavigateToProviderSettings,
+  onNavigateToDependencySettings,
+  toolResultSignature: _toolResultSignature,
+  currentProvider,
 }: MessageItemProps): React.ReactElement {
   const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
   const [showStreamingConnectHint, setShowStreamingConnectHint] = useState(false);
@@ -250,10 +276,11 @@ export const MessageItem = memo(function MessageItem({
     }
     return '';
   }, [message, extractMarkdownContent]);
+  const hasCopyableText = markdownContent.trim().length > 0;
 
   const handleCopyMessage = useCallback(async () => {
     // Prevent copying if message is empty or already in "copied" state
-    if (!markdownContent.trim() || copiedMessageIndex === messageIndex) return;
+    if (!hasCopyableText || copiedMessageIndex === messageIndex) return;
 
     const success = await copyToClipboard(markdownContent);
     if (success) {
@@ -270,7 +297,7 @@ export const MessageItem = memo(function MessageItem({
         copyTimeoutRef.current = null;
       }, 1500);
     }
-  }, [markdownContent, messageIndex, copiedMessageIndex]);
+  }, [hasCopyableText, markdownContent, messageIndex, copiedMessageIndex]);
 
   // Cleanup timeout on unmount to prevent memory leaks
   useEffect(() => {
@@ -345,6 +372,12 @@ export const MessageItem = memo(function MessageItem({
   }, [message.type, messageKey, onNodeRef]);
 
   const isProviderNotConfigured = message.type === 'error' && isProviderNotConfiguredError(getMessageText(message));
+  const errorDiagnosticPattern = useMemo(
+    () => (message.type === 'error' && !isProviderNotConfigured
+      ? matchErrorPattern(getMessageText(message))
+      : null),
+    [message, isProviderNotConfigured, getMessageText]
+  );
 
   const renderGroupedBlocks = () => {
     if (message.type === 'error') {
@@ -356,13 +389,26 @@ export const MessageItem = memo(function MessageItem({
           />
         );
       }
-      return <MarkdownBlock content={getMessageText(message)} />;
+      return (
+        <>
+          <MarkdownBlock content={getMessageText(message)} />
+          {errorDiagnosticPattern && (
+            <ErrorDiagnosticCard
+              t={t}
+              pattern={errorDiagnosticPattern}
+              onNavigateToDependencySettings={onNavigateToDependencySettings}
+            />
+          )}
+        </>
+      );
     }
 
     if (isEmptyStreamingPlaceholder) {
       return (
         <div className="streaming-connect-status">
-          <span className="streaming-connect-text">{t('chat.streamingConnected')}</span>
+          <span className="streaming-connect-text">
+            {t('chat.streamingConnected', { provider: getProviderDisplayName(currentProvider) })}
+          </span>
         </div>
       );
     }
@@ -375,13 +421,18 @@ export const MessageItem = memo(function MessageItem({
             name: block.name,
             input: block.input,
             result: findToolResult(block.id, messageIndex),
+            toolId: block.id,
           };
         });
 
         if (readItems.length === 1) {
           return (
             <div key={`${messageIndex}-readgroup-${grouped.startIndex}`} className="content-block">
-              <ReadToolBlock input={readItems[0].input} />
+              <ReadToolBlock
+                input={readItems[0].input}
+                result={readItems[0].result}
+                toolId={readItems[0].toolId}
+              />
             </div>
           );
         }
@@ -518,7 +569,7 @@ export const MessageItem = memo(function MessageItem({
 
   return (
     <div
-      className={`message ${message.type}${isProviderNotConfigured ? ' provider-not-configured' : ''}`}
+      className={`message ${message.type}${isLast ? ' is-last-message' : ''}${isProviderNotConfigured ? ' provider-not-configured' : ''}`}
       ref={anchorRefCallback}
       data-message-anchor-id={message.type === 'user' ? messageKey : undefined}
     >
@@ -528,18 +579,20 @@ export const MessageItem = memo(function MessageItem({
           <div className="message-timestamp-header">
             {formatTime(message.timestamp)}
           </div>
-          <CopyButton
-            className="message-copy-btn-inline"
-            isCopied={copiedMessageIndex === messageIndex}
-            onClick={handleCopyMessage}
-            copyLabel={t('markdown.copyMessage')}
-            copySuccessText={t('markdown.copySuccess')}
-          />
+          {hasCopyableText && (
+            <CopyButton
+              className="message-copy-btn-inline"
+              isCopied={copiedMessageIndex === messageIndex}
+              onClick={handleCopyMessage}
+              copyLabel={t('markdown.copyMessage')}
+              copySuccessText={t('markdown.copySuccess')}
+            />
+          )}
         </div>
       )}
 
       {/* Copy button for assistant messages only */}
-      {message.type === 'assistant' && !isMessageStreaming && (
+      {message.type === 'assistant' && !isMessageStreaming && hasCopyableText && (
         <CopyButton
           isCopied={copiedMessageIndex === messageIndex}
           onClick={handleCopyMessage}
@@ -548,8 +601,9 @@ export const MessageItem = memo(function MessageItem({
         />
       )}
 
-      {/* Role label for non-user/assistant messages */}
-      {message.type !== 'assistant' && message.type !== 'user' && (
+      {/* Role label for non-user/assistant messages — hidden for notification types */}
+      {message.type !== 'assistant' && message.type !== 'user'
+        && message.type !== 'notification' && message.type !== 'task_notification' && (
         <div className="message-role-label">
           {message.type}
         </div>
@@ -558,6 +612,17 @@ export const MessageItem = memo(function MessageItem({
       <div className="message-content">
         {renderGroupedBlocks()}
       </div>
+
+      {/* Duration display after last assistant message */}
+      {message.type === 'assistant' && !isMessageStreaming && typeof message.durationMs === 'number' && (
+        <div className="message-duration">
+          <span className="message-duration-inner">
+            <span className="message-duration-flag codicon codicon-clock"></span>
+            <span className="message-duration-cost">{t('chat.totalDuration')}</span>
+            <span className="message-duration-value">{formatDurationMs(message.durationMs)}</span>
+          </span>
+        </div>
+      )}
     </div>
   );
 });

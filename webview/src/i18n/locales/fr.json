@@ -12,6 +12,7 @@
     "close": "Fermer",
     "newSession": "Nouvelle session",
     "newTab": "Nouvel onglet",
+    "dontAskAgain": "Ne plus demander",
     "history": "Historique",
     "settings": "Paramètres",
     "thinking": "Réflexion",
@@ -87,8 +88,34 @@
     "attachmentFile": "[Pièce jointe: {{fileName}}]",
     "unknownFile": "Unknown file",
     "attachmentsUploaded": "[Pièces jointes téléchargées]",
-    "streamingConnected": "Claude connecté, en train de comprendre votre question",
-    "showEarlierMessages": "Afficher {{count}} messages précédents"
+    "streamingConnected": "{{provider}} connecté, en train de comprendre votre question",
+    "showEarlierMessages": "Afficher {{count}} messages précédents",
+    "totalDuration": "Cette réponse a pris",
+    "search": {
+      "ariaLabel": "Rechercher dans la conversation",
+      "placeholder": "Rechercher dans la conversation…",
+      "next": "Résultat suivant (Entrée)",
+      "previous": "Résultat précédent (Maj+Entrée)",
+      "close": "Fermer (Échap)",
+      "counter": "{{current}}/{{total}}",
+      "noResults": "Aucun résultat",
+      "searching": "Recherche en cours…",
+      "expandedHint": "{{count}} messages précédents développés",
+      "matchCase": "Respecter la casse (Alt+C)",
+      "wholeWord": "Mot entier (Alt+W)",
+      "regex": "Expression régulière (Alt+R)",
+      "invalidRegex": "Regex invalide",
+      "openTooltip": "Rechercher dans la conversation (Cmd/Ctrl+F)"
+    },
+    "compactSummary": {
+      "summarizedConversation": "Conversation résumée",
+      "compactSummary": "Résumé compact",
+      "messagesUpTo": "{{count}} messages résumés jusqu'à ce point",
+      "messagesFrom": "{{count}} messages résumés à partir de ce point",
+      "userContext": "Contexte : « {{context}} »",
+      "expand": "Développer le résumé",
+      "collapse": "Réduire le résumé"
+    }
   },
   "settings": {
     "title": "Paramètres",
@@ -111,6 +138,7 @@
       },
       "language": {
         "label": "Langue de l'interface",
+        "followIde": "Suivre l'IDE",
         "simplifiedChinese": "简体中文",
         "traditionalChinese": "繁體中文",
         "english": "English",
@@ -119,7 +147,8 @@
         "french": "Français",
         "japanese": "日本語",
         "russian": "Русский",
-        "korean": "한국어"
+        "korean": "한국어",
+        "portuguese": "Português (Brasil)"
       },
       "nodePath": {
         "label": "Chemin Node.js",
@@ -144,8 +173,28 @@
         "level6": "Maximale (140%)"
       },
       "editorFont": {
-        "label": "Police (suit la police de l'éditeur)",
-        "hint": "Non modifiable ici. Pour modifier, allez dans Paramètres IDEA → Éditeur → Police (redémarrez IDEA pour que la police du plugin prenne effet)"
+        "label": "Police UI",
+        "hint": "Ici vous changez la police de l'interface du plugin ; le code peut utiliser une police séparée.",
+        "followOption": "Suivre la police UI d'IDEA ({{font}})",
+        "customOption": "Fichier de police UI personnalisé",
+        "customPathLabel": "Chemin du fichier de police UI",
+        "customPathPlaceholder": "Choisissez ou saisissez le chemin d'un fichier .ttf / .otf pour la police UI",
+        "browse": "Parcourir",
+        "warningUnavailable": "La police UI est indisponible, la police UI d'IDEA est utilisée",
+        "statusFollowEditor": "Police UI d'IDEA actuellement utilisée : {{font}}",
+        "statusCustom": "Police UI personnalisée actuellement utilisée : {{font}}"
+      },
+      "codeFont": {
+        "label": "Police de code",
+        "hint": "Le code Markdown et les blocs de commande utilisent cette police.",
+        "followOption": "Suivre la police de l'éditeur ({{font}})",
+        "customOption": "Fichier de police de code personnalisé",
+        "customPathLabel": "Chemin du fichier de police de code",
+        "customPathPlaceholder": "Choisissez ou saisissez le chemin d'un fichier .ttf / .otf pour la police de code",
+        "browse": "Parcourir",
+        "warningUnavailable": "La police de code est indisponible, la police de l'éditeur est utilisée",
+        "statusFollowEditor": "Police de l'éditeur actuellement utilisée : {{font}}",
+        "statusCustom": "Police de code personnalisée actuellement utilisée : {{font}}"
       },
       "streaming": {
         "label": "Streaming",
@@ -159,11 +208,31 @@
         "disabled": "Désactivé",
         "hint": "Lorsqu'activé, sélectionner un fichier dans l'arborescence du projet enverra automatiquement son chemin à l'AI (note : seul le chemin du fichier est envoyé, pas son contenu). Lorsque désactivé, une action manuelle est requise."
       },
+      "promptEnhancer": {
+        "label": "Prompt Enhancer",
+        "modelLabel": "Enhancer Model",
+        "resetToDefault": "Restore Default",
+        "providerAvailable": "Available",
+        "providerUnavailable": "Currently unavailable",
+        "provider": {
+          "claude": "Claude Code",
+          "codex": "Codex"
+        },
+        "currentProviderAuto": "Currently using automatic selection: {{provider}}",
+        "currentProviderManual": "Currently using manually selected provider: {{provider}}",
+        "currentProviderUnavailable": "The selected provider is currently unavailable: {{provider}}"
+      },
       "diffExpanded": {
         "label": "Développer les différences par défaut",
         "enabled": "Développé",
         "disabled": "Réduit",
         "hint": "Lorsque activé, les différences de code dans le chat seront développées par défaut. Lorsque désactivé, les différences commencent réduites."
+      },
+      "taskCompletionNotification": {
+        "label": "Notification de fin de tâche",
+        "enabled": "Activé",
+        "disabled": "Désactivé",
+        "hint": "Lorsque activé, affiche une notification système lorsque la tâche AI est terminée. Lorsque désactivé, aucune notification apparaît."
       },
       "sendShortcut": {
         "label": "Raccourci d'envoi",
@@ -171,6 +240,11 @@
         "enterDesc": "Appuyez sur Entrée pour envoyer le message, Shift+Entrée pour nouvelle ligne",
         "cmdEnter": "⌘/Ctrl+Entrée pour envoyer",
         "cmdEnterDesc": "Appuyez sur ⌘/Ctrl+Entrée pour envoyer le message, Entrée pour nouvelle ligne"
+      },
+      "permissionDialogTimeout": {
+        "label": "Délai d'expiration des dialogues de permission et de question",
+        "unit": "secondes",
+        "hint": "Définissez le délai d'expiration pour les dialogues de questions de Claude et les dialogues de demande de permission (30~3600 secondes). Après expiration, le dialogue se fermera automatiquement et Claude continuera."
       },
       "chatBgColor": {
         "label": "Couleur de fond du chat",
@@ -183,6 +257,12 @@
         "custom": "Personnalisé",
         "reset": "Réinitialiser",
         "hint": "Personnaliser la couleur de fond de vos messages. Laisser vide pour suivre le thème par défaut."
+      },
+      "newSessionConfirm": {
+        "label": "Confirmation de nouvelle session",
+        "enabled": "Activé",
+        "disabled": "Désactivé",
+        "hint": "Lorsqu'elle est désactivée, créer une nouvelle session dans une conversation contenant des messages se fera directement, sans afficher la boîte de dialogue de confirmation."
       }
     },
     "providers": "Gestion des fournisseurs",
@@ -230,13 +310,32 @@
     "mcpDesc": "Configurer et gérer les serveurs Model Context Protocol",
     "permissions": "Permissions",
     "permissionsDesc": "Gérer les permissions d'accès et d'opération de fichiers de Claude Code",
+    "promptEnhancer": {
+      "title": "Prompt Enhancer",
+      "description": "Choose which provider and model should be used when enhancing prompts before sending them."
+    },
     "commit": {
       "title": "Commit AI",
       "description": "Configure AI-generated Git commit message behavior",
+      "providerModel": {
+        "label": "Fournisseur du modèle de commit",
+        "modelLabel": "Modèle de commit",
+        "resetToDefault": "Réinitialiser",
+        "providerAvailable": "Disponible",
+        "providerUnavailable": "Non disponible",
+        "currentProviderAuto": "Utilise actuellement la sélection automatique : {{provider}}",
+        "currentProviderManual": "Utilise actuellement le fournisseur sélectionné manuellement : {{provider}}",
+        "currentProviderUnavailable": "Le fournisseur sélectionné n'est actuellement pas disponible : {{provider}}"
+      },
       "prompt": {
         "label": "Additional Prompt",
         "placeholder": "Add your extra requirements here, e.g., generate commit in English, include issue number, etc...",
         "hint": "The plugin has built-in CCG Commits specification prompts. Content you add here will be used as additional requirements, and AI will prioritize your instructions."
+      },
+      "projectPrompt": {
+        "label": "Prompt supplémentaire spécifique au projet",
+        "placeholder": "Ajoutez ici les exigences spécifiques au projet, par exemple : le scope doit utiliser le nom du module, le body du commit doit inclure la portée de l'impact, etc...",
+        "hint": "Ce prompt s'applique uniquement au projet actuel et est combiné avec le prompt supplémentaire global. En cas de conflit, le prompt du projet prévaut. Les différents projets peuvent être configurés indépendamment."
       },
       "codeReview": {
         "comingSoon": "Coming Soon",
@@ -287,6 +386,12 @@
           "minutesAgo_other": "il y a {{count}} minutes",
           "justNow": "à l'instant"
         }
+      },
+      "aiTitleGeneration": {
+        "label": "Génération automatique du titre de session par IA",
+        "enabled": "Activé",
+        "disabled": "Désactivé",
+        "hint": "Lorsqu'activé, un titre court généré par Haiku est créé après le premier tour d'une nouvelle session. Désactivé, le premier message de l'utilisateur reste le titre."
       }
     },
     "codexFeatureUnavailable": "Cette section des paramètres n'est pas encore disponible dans Codex. Passez à Claude Code.",
@@ -471,6 +576,7 @@
         "deepseek": "DeepSeek",
         "minimax": "MiniMax",
         "xiaomi": "Xiaomi MiMo",
+        "xiaomiPlan": "Xiaomi MiMo Plan",
         "qwen": "Alibaba Qwen",
         "openrouter": "OpenRouter"
       }
@@ -509,9 +615,28 @@
         "modelIdPlaceholder": "Model ID (required, e.g., gpt-4o)",
         "modelLabelPlaceholder": "Display name (optional)",
         "modelDescPlaceholder": "Model description (optional)",
+        "cliLoginProviderName": "Connexion Codex CLI",
+        "cliLoginProviderDescription": "Utiliser les identifiants d'abonnement ChatGPT de Codex CLI",
+        "cliLoginAuthorizeTitle": "Activer la connexion Codex CLI",
+        "cliLoginAuthorizeMessage": "Cela effacera votre config.toml et utilisera les identifiants d'abonnement ChatGPT de Codex CLI.",
+        "cliLoginAuthorizeDetail": "Assurez-vous d'etre connecte via 'codex login' dans votre terminal. Votre config.toml actuelle sera sauvegardee.",
+        "cliLoginDisableTitle": "Desactiver la connexion Codex CLI",
+        "cliLoginDisableMessage": "Cela restaurera votre config.toml precedent et basculera vers l'authentification par cle API.",
         "modelIdRequired": "Model ID is required",
         "modelIdInvalid": "Invalid model ID format (only letters, numbers, dots, hyphens, underscores, slashes and colons allowed)",
-        "modelIdDuplicate": "Model ID already exists"
+        "modelIdDuplicate": "Model ID already exists",
+        "envVarsTitle": "Environment Variables",
+        "messageEnvLabel": "Message Environment Variables",
+        "messageEnvHint": "Custom environment variables injected into the Codex message subprocess",
+        "mcpEnvLabel": "MCP Environment Variables",
+        "mcpEnvHint": "Custom environment variables injected into the MCP tool discovery subprocess",
+        "envKeyPlaceholder": "ENV_KEY",
+        "envValuePlaceholder": "value",
+        "addEnvVar": "Add Variable",
+        "envKeyInvalid": "Invalid key name (must start with letter/underscore, alphanumeric only)",
+        "envKeyProtected": "Cannot set built-in variable: {{key}}",
+        "envKeyDuplicate": "Duplicate key: {{key}}",
+        "envValueTooLong": "Valeur trop longue (max {{max}} caractères)"
       }
     },
     "agent": {
@@ -587,6 +712,16 @@
     "confirmDelete": "Confirmer la suppression",
     "deleteMessage": "Êtes-vous sûr de vouloir supprimer cette session ? Cette action ne peut pas être annulée.",
     "deleteSession": "Supprimer cette session",
+    "selectMode": "Select",
+    "exitSelectMode": "Exit selection",
+    "selectedSessions": "{{count}} selected",
+    "selectAll": "Select all",
+    "clearSelection": "Clear",
+    "deleteSelected": "Delete selected",
+    "confirmDeleteSelected": "Confirm Delete",
+    "deleteSelectedMessage": "Are you sure you want to delete {{count}} selected sessions? This action cannot be undone.",
+    "selectSession": "Select session",
+    "selectSessionWithTitle": "Select {{title}}",
     "exportSession": "Exporter la session",
     "exportSuccess": "Session exportée",
     "exportFailed": "Échec de l'exportation",
@@ -609,6 +744,9 @@
     "cancelEditButton": "Annuler",
     "titleTooLong": "Titre trop long (maximum 50 caractères)",
     "titleUpdated": "Titre mis à jour",
+    "copySessionId": "Copier l'ID de session pour CLI resume",
+    "sessionIdCopied": "ID de session copié",
+    "copyFailed": "Échec de la copie",
     "timeAgo": {
       "yearsAgo": "il y a des années",
       "monthsAgo": "il y a des mois",
@@ -636,7 +774,8 @@
       "WebSearch": "Recherche web",
       "WebFetch": "Récupérer web",
       "execute": "Exécuter {{toolName}}",
-      "readDirectory": "Lire le répertoire"
+      "readDirectory": "Lire le répertoire",
+      "timeoutWarning": "Veuillez répondre rapidement, la boîte de dialogue se fermera dans {{seconds}} secondes"
     }
   },
   "askUserQuestion": {
@@ -692,6 +831,50 @@
     "clickToCopy": "Cliquer pour copier",
     "switch": "Basculer",
     "switchProvider": "Changer de fournisseur",
+    "runtimeProvider": {
+      "title": "Changer le fournisseur actuel",
+      "loading": "Chargement des fournisseurs...",
+      "empty": "Aucun fournisseur disponible",
+      "switched": "Basculé vers {{provider}}"
+    },
+    "nodeProcesses": {
+      "title": "Gestionnaire de processus Node",
+      "badge": "{{total}} processus",
+      "badgeWithOrphan": "{{total}} · {{orphan}} orphelin ⚠",
+      "summary": "Total : {{total}} · Orphelins : {{orphan}}",
+      "loading": "Chargement des processus...",
+      "empty": "Aucun processus Node actif",
+      "refresh": "Actualiser",
+      "groups": {
+        "daemon": "Processus daemon",
+        "channel": "Conversations en cours",
+        "orphan": "Processus orphelins"
+      },
+      "kind": {
+        "daemonShort": "Daemon",
+        "channelShort": "Canal",
+        "orphanShort": "Orphelin"
+      },
+      "kill": "Terminer",
+      "interrupt": "Arrêter",
+      "restart": "Redémarrer",
+      "pending": "Traitement...",
+      "killAll": "Nettoyer les orphelins ({{count}})",
+      "killHint": "Forcer la fin de ce processus Node",
+      "killAllHint": "Terminer tous les processus orphelins détectés",
+      "restartHint": "Arrête le daemon ; le prochain message en démarrera un nouveau automatiquement",
+      "killConfirmTitle": "Terminer ce processus ?",
+      "killConfirm": "Terminer le processus PID {{pid}} ? Les conversations en cours peuvent être perdues.",
+      "restartConfirmTitle": "Redémarrer le daemon ?",
+      "restartConfirm": "Redémarrer le daemon ? Les conversations actives seront interrompues.",
+      "killAllConfirmTitle": "Nettoyer tous les processus orphelins ?",
+      "killAllConfirm": "Terminer les {{count}} processus orphelins ?",
+      "killSuccess": "Processus terminé",
+      "killAllSuccess": "{{count}} processus orphelin(s) nettoyé(s)",
+      "restartSuccess": "Daemon arrêté ; une nouvelle instance démarrera automatiquement au prochain message",
+      "killFailed": "Échec de la fin : {{error}}",
+      "activeRequests": "{{count}} en cours"
+    },
     "link": "Lien"
   },
   "markdown": {
@@ -1119,37 +1302,63 @@
         "description": "Sonnet 4.6 · Modèle recommandé par défaut"
       },
       "opus46": {
-        "label": "Opus 4.6",
-        "description": "Opus 4.6 · Le plus récent et le plus performant"
+        "label": "Opus 4.7",
+        "description": "Opus 4.7 · Modèle phare précédent"
       },
       "opus46_1m": {
-        "label": "Opus (1M contexte)",
-        "description": "Opus 4.6 pour les longues sessions"
+        "label": "Opus 4.6",
+        "description": "Opus 4.6 · Modèle de raisonnement haute performance"
       },
       "haiku45": {
         "label": "Haiku 4.5",
         "description": "Haiku 4.5 · Le plus rapide pour des réponses rapides"
+      },
+      "opus48": {
+        "label": "Opus 4.8",
+        "description": "Opus 4.8 · Le plus récent et le plus performant"
       }
+    },
+    "longContext": {
+      "label": "1M",
+      "shortLabel": "1M contexte",
+      "tooltipEnabled": "Activer/désactiver le contexte 1M",
+      "tooltipDisabled": "1M contexte non disponible pour Haiku"
     },
     "codex": {
       "gpt53codex": {
-        "label": "gpt-5.3-codex",
+        "label": "GPT-5.3-Codex",
         "description": "Dernier modèle de codage agentique avec des capacités améliorées."
       },
+      "gpt55": {
+        "label": "GPT-5.5",
+        "description": "Modèle frontier le plus récent aux capacités renforcées."
+      },
       "gpt54": {
-        "label": "gpt-5.4",
+        "label": "GPT-5.4",
         "description": "Dernier modèle de pointe avec des capacités améliorées."
       },
       "gpt52codex": {
-        "label": "gpt-5.2-codex",
-        "description": "Dernier modèle de codage agentique de pointe."
+        "label": "GPT-5.2-Codex",
+        "description": "Modèle de codage agentique de pointe."
       },
       "gpt51codexMax": {
-        "label": "gpt-5.1-codex-max",
+        "label": "GPT-5.1-Codex-Max",
         "description": "Modèle phare optimisé pour Codex avec raisonnement profond et rapide."
       },
+      "gpt54mini": {
+        "label": "GPT-5.4-Mini",
+        "description": "Modèle de codage agentique de pointe plus léger."
+      },
+      "gpt53codexSpark": {
+        "label": "GPT-5.3-Codex-Spark",
+        "description": "Modèle de codage ultra-rapide."
+      },
+      "gpt52": {
+        "label": "GPT-5.2",
+        "description": "Optimisé pour le travail professionnel et les agents longue durée."
+      },
       "gpt51codexMini": {
-        "label": "gpt-5.1-codex-mini",
+        "label": "GPT-5.1-Codex-Mini",
         "description": "Optimisé pour Codex. Moins cher et plus rapide, mais moins performant."
       }
     }
@@ -1203,7 +1412,7 @@
       "label": "Claude Code"
     },
     "codex": {
-      "label": "Codex Cli"
+      "label": "Codex"
     },
     "gemini": {
       "label": "Gemini Cli"
@@ -1329,7 +1538,51 @@
   },
   "error": {
     "providerNotConfigured": "Fournisseur non configuré",
-    "providerNotConfiguredDesc": "Aucun fournisseur IA n'est configuré. Veuillez ajouter une clé API dans les paramètres du fournisseur avant de commencer une conversation.",
-    "goToProviderSettings": "Aller aux paramètres du fournisseur"
+    "providerNotConfiguredDesc": "Aucun fournisseur IA n'est encore configuré, ou l'utilisation de la configuration locale n'a pas été autorisée. Veuillez terminer la configuration dans les paramètres de gestion des fournisseurs avant de commencer une conversation.",
+    "goToProviderSettings": "Aller aux paramètres"
+  },
+  "errorDiagnostic": {
+    "copyCommand": "Copier",
+    "copied": "Copié",
+    "openDependencySettings": "Ouvrir la gestion des dépendances",
+    "recommended": "Recommandé",
+    "codexThreadResume": {
+      "title": "Le thread de session n'est plus valide",
+      "intro": "La création d'une nouvelle session résoudra ce problème. L'identifiant de thread de la session actuelle n'existe plus sur le serveur Codex.",
+      "reason": "Codex supprime les anciens threads après un certain temps, ce qui peut déclencher cette erreur lors de la reprise d'une session précédente."
+    },
+    "sdkNativeBinaryMissing": {
+      "title": "Installation du SDK incomplète — binaire natif manquant",
+      "intro": "Il s'agit d'un problème connu du miroir npm de Taobao (ce n'est pas un bug du plugin). Le miroir n'a pas entièrement synchronisé les fichiers spécifiques à la plateforme. Vous pouvez le résoudre manuellement avec l'une des options ci-dessous :",
+      "reason": "Ce problème disparaîtra automatiquement une fois la synchronisation du miroir Taobao terminée — aucune action supplémentaire n'est nécessaire.",
+      "solutions": {
+        "switchRegistry": {
+          "title": "Option 1 : Basculer temporairement vers le registre officiel et réinstaller",
+          "step0": "1. Exécutez dans votre terminal (passage au registre npm officiel) :",
+          "step1": "2. Ouvrez les paramètres de gestion des dépendances du plugin et cliquez sur Réinstaller :",
+          "step2": "3. Une fois la réinstallation terminée, revenez au miroir Taobao :"
+        },
+        "downgrade": {
+          "title": "Option 2 : Revenir à une version antérieure",
+          "step0": "Dans Gestion des dépendances, passez la version du SDK à v0.2.112 ou antérieure. Redémarrez IDEA après le changement."
+        }
+      }
+    },
+    "spawnEbusy": {
+      "title": "spawn EBUSY — échec du lancement du processus enfant",
+      "intro": "Cette erreur est généralement causée par une version de Node.js incompatible ou une installation incomplète du SDK. Essayez les deux options ci-dessous dans l'ordre :",
+      "reason": "EBUSY est une erreur système levée par Node.js lorsqu'un processus enfant ne peut pas être lancé en raison d'une ressource occupée. Causes courantes : problèmes de compatibilité avec Node.js 24, un SDK obsolète, ou une installation incomplète depuis le miroir Taobao.",
+      "solutions": {
+        "checkNodeVersion": {
+          "title": "Option 1 : Vérifiez votre version de Node.js",
+          "step0": "Exécutez la commande ci-dessous dans un terminal pour voir votre version. Node 22 ou la LTS actuelle est recommandée — les utilisateurs ont signalé de nombreux problèmes sur Node 24, préférez donc Node 20 ou 22 :"
+        },
+        "reinstallLatestSdk": {
+          "title": "Option 2 : Réinstaller le dernier SDK depuis le registre npm officiel",
+          "step0": "1. Basculez vers le registre npm officiel (évitez le miroir Taobao — il peut ne pas avoir la dernière version) :",
+          "step1": "2. Ouvrez Gestion des dépendances et réinstallez le dernier SDK :"
+        }
+      }
+    }
   }
 }

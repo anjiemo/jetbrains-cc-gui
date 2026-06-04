@@ -13,7 +13,6 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -197,7 +196,11 @@ public class SessionHandler extends BaseMessageHandler {
                     // Claude now triggers success on actual stream_end callback.
                     // Codex has no stream_end event, keep success trigger at completion.
                     if (project != null && "codex".equals(context.getSession().getProvider())) {
-                        ClaudeNotifier.showSuccess(project, "Task completed");
+                        var session = context.getSession();
+                        ClaudeNotifier.showSuccess(
+                            project,
+                            ClaudeNotifier.buildTitleFromSession(session),
+                            ClaudeNotifier.buildPreviewFromSession(session, "Task completed"));
                     }
                 })
                 .exceptionally(ex -> {
@@ -339,7 +342,11 @@ public class SessionHandler extends BaseMessageHandler {
                     // Claude now triggers success on actual stream_end callback.
                     // Codex has no stream_end event, keep success trigger at completion.
                     if (project != null && "codex".equals(context.getSession().getProvider())) {
-                        ClaudeNotifier.showSuccess(project, "Task completed");
+                        var session = context.getSession();
+                        ClaudeNotifier.showSuccess(
+                            project,
+                            ClaudeNotifier.buildTitleFromSession(session),
+                            ClaudeNotifier.buildPreviewFromSession(session, "Task completed"));
                     }
                 })
                 .exceptionally(ex -> {
@@ -437,8 +444,9 @@ public class SessionHandler extends BaseMessageHandler {
      */
     private String resolveWorkingDirectoryFromActiveFile(String projectPath) {
         try {
-            VirtualFile[] selectedFiles = ReadAction.compute(() ->
-                    FileEditorManager.getInstance(context.getProject()).getSelectedFiles()
+            VirtualFile[] selectedFiles = ApplicationManager.getApplication().runReadAction(
+                    (com.intellij.openapi.util.Computable<VirtualFile[]>) () ->
+                            FileEditorManager.getInstance(context.getProject()).getSelectedFiles()
             );
             if (selectedFiles == null || selectedFiles.length == 0) {
                 return null;

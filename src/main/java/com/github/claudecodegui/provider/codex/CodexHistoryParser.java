@@ -1,6 +1,7 @@
 package com.github.claudecodegui.provider.codex;
 
 import com.github.claudecodegui.util.TagExtractor;
+import com.github.claudecodegui.util.TextSanitizer;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.diagnostic.Logger;
@@ -34,6 +35,8 @@ class CodexHistoryParser {
     CodexHistoryReader.SessionInfo parseSessionFile(Path sessionFile) throws IOException {
         CodexHistoryReader.SessionInfo session = new CodexHistoryReader.SessionInfo();
 
+        // Default: derive sessionId from filename; prefer session_meta.id when available
+        // to match the thread ID the Codex SDK sends to the frontend via setSessionId.
         String fileName = sessionFile.getFileName().toString();
         session.sessionId = fileName.substring(0, fileName.lastIndexOf(".jsonl"));
 
@@ -48,7 +51,7 @@ class CodexHistoryParser {
                 }
 
                 try {
-                    CodexHistoryReader.CodexMessage msg = gson.fromJson(line, CodexHistoryReader.CodexMessage.class);
+                    CodexHistoryReader.CodexMessage msg = this.gson.fromJson(line, CodexHistoryReader.CodexMessage.class);
                     if (msg == null) {
                         continue;
                     }
@@ -56,8 +59,18 @@ class CodexHistoryParser {
                     messages.add(msg);
 
                     if ("session_meta".equals(msg.type) && msg.payload != null) {
+                        // Use session_meta.id as the canonical session ID.
+                        // This matches the thread_id the Codex SDK returns via [THREAD_ID],
+                        // ensuring custom titles saved under this ID are found when loading history.
+                        if (msg.payload.has("id") && !msg.payload.get("id").isJsonNull()) {
+                            String metaId = msg.payload.get("id").getAsString();
+                            if (metaId != null && !metaId.isEmpty()) {
+                                session.sessionId = metaId;
+                            }
+                        }
+
                         if (msg.payload.has("cwd")) {
-                            session.cwd = msg.payload.get("cwd").getAsString();
+                            session.cwd = TextSanitizer.sanitizeInvalidSurrogates(msg.payload.get("cwd").getAsString());
                         }
 
                         if (msg.payload.has("timestamp")) {
@@ -128,12 +141,45 @@ class CodexHistoryParser {
         if (text == null || text.isEmpty()) {
             return null;
         }
+        // Strip system/instruction tags that the Codex SDK prepends to user messages.
+        // These contain AGENTS.md content and should not appear in titles.
+        text = stripSystemTags(text);
         text = TagExtractor.extractCommandMessageContent(text);
-        text = text.replace("\n", " ").trim();
-        if (text.length() > 45) {
-            text = text.substring(0, 45) + "...";
+        return TextSanitizer.sanitizeAndTruncateSingleLine(text, 45);
+    }
+
+    /**
+     * Remove known system/instruction XML tag blocks from text.
+     * Codex prepends &lt;agents-instructions&gt; blocks to user messages containing
+     * AGENTS.md content; these should be stripped before title extraction.
+     */
+    static String stripSystemTags(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
         }
-        return text;
+        String[] systemTags = {"agents-instructions", "system-reminder", "system-prompt"};
+        String result = text;
+        for (String tag : systemTags) {
+            result = removeTagBlock(result, tag);
+        }
+        return result.trim();
+    }
+
+    /**
+     * Remove a complete XML tag block (opening tag through closing tag) from text.
+     */
+    private static String removeTagBlock(String text, String tagName) {
+        String openTag = "<" + tagName + ">";
+        String closeTag = "</" + tagName + ">";
+        int start = text.indexOf(openTag);
+        if (start == -1) {
+            return text;
+        }
+        int end = text.indexOf(closeTag, start);
+        if (end == -1) {
+            return text;
+        }
+        return text.substring(0, start) + text.substring(end + closeTag.length());
     }
 
     long parseTimestamp(String timestamp) {

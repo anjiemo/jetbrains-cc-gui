@@ -5,6 +5,9 @@ import com.github.claudecodegui.provider.common.SDKResult;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
 /**
  * Adapts tagged Node.js output lines into bridge callbacks and SDKResult updates.
  */
@@ -21,14 +24,26 @@ class ClaudeStreamAdapter {
             MessageCallback callback,
             SDKResult result,
             StringBuilder assistantContent,
-            boolean[] hadSendError,
-            String[] lastNodeError
+            AtomicBoolean hadSendError,
+            AtomicReference<String> lastNodeError
+    ) {
+        processOutputLine(line, callback, result, assistantContent, hadSendError, lastNodeError, new AtomicBoolean(false));
+    }
+
+    void processOutputLine(
+            String line,
+            MessageCallback callback,
+            SDKResult result,
+            StringBuilder assistantContent,
+            AtomicBoolean hadSendError,
+            AtomicReference<String> lastNodeError,
+            AtomicBoolean wasAborted
     ) {
         if (line.startsWith("[STDIN_ERROR]")
                 || line.startsWith("[STDIN_PARSE_ERROR]")
                 || line.startsWith("[GET_SESSION_ERROR]")
                 || line.startsWith("[PERSIST_ERROR]")) {
-            lastNodeError[0] = line;
+            lastNodeError.set(line);
         }
 
         if (line.startsWith("[MESSAGE]")) {
@@ -44,6 +59,12 @@ class ClaudeStreamAdapter {
         }
 
         if (line.startsWith("[SEND_ERROR]")) {
+            // If the request was aborted by the user, suppress the SEND_ERROR
+            // so the UI does not show an error toast. The abort path in
+            // ClaudeDaemonRequestExecutor handles completion gracefully.
+            if (wasAborted.get()) {
+                return;
+            }
             String jsonStr = line.substring("[SEND_ERROR]".length()).trim();
             String errorMessage = jsonStr;
             try {
@@ -53,7 +74,7 @@ class ClaudeStreamAdapter {
                 }
             } catch (Exception ignored) {
             }
-            hadSendError[0] = true;
+            hadSendError.set(true);
             result.success = false;
             result.error = errorMessage;
             callback.onError(errorMessage);
@@ -113,6 +134,11 @@ class ClaudeStreamAdapter {
 
         if (line.startsWith("[MESSAGE_START]")) {
             callback.onMessage("message_start", "");
+            return;
+        }
+
+        if (line.startsWith("[BLOCK_RESET]")) {
+            callback.onMessage("block_reset", "");
             return;
         }
 

@@ -10,6 +10,7 @@ import com.intellij.openapi.diagnostic.Logger;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -37,6 +38,7 @@ public class DaemonBridge {
     private static final long DAEMON_START_TIMEOUT_MS = 30_000;
     private static final long HEARTBEAT_INTERVAL_MS = 15_000;
     private static final long HEARTBEAT_TIMEOUT_MS = 45_000; // 3 missed heartbeats = dead
+    private static final long ACTIVE_REQUEST_HEARTBEAT_TIMEOUT_MS = 180_000;
     private static final int MAX_RESTART_ATTEMPTS = 3;
     private static final long RESTART_WINDOW_MS = 30_000; // Reset restart counter after this period of stability
 
@@ -55,6 +57,8 @@ public class DaemonBridge {
     private final AtomicInteger restartAttempts = new AtomicInteger(0);
     private final AtomicLong lastSuccessfulStart = new AtomicLong(0);
     private final AtomicLong lastHeartbeatResponse = new AtomicLong(0);
+    private final AtomicLong lastDaemonActivity = new AtomicLong(0);
+    private final AtomicInteger activeRequestCount = new AtomicInteger(0);
     private final Object startLock = new Object();
 
     // Pending request handlers: requestId -> handler
@@ -62,6 +66,10 @@ public class DaemonBridge {
 
     // Lifecycle listener
     private volatile DaemonLifecycleListener lifecycleListener;
+
+    // Event listeners for custom daemon events. CopyOnWriteArrayList allows safe
+    // iteration during dispatch while listeners may be added/removed concurrently.
+    private final List<DaemonEventListener> eventListeners = new CopyOnWriteArrayList<>();
 
     public DaemonBridge(
             NodeDetector nodeDetector,
@@ -113,7 +121,9 @@ public class DaemonBridge {
                     return false;
                 }
 
-                ProcessBuilder pb = new ProcessBuilder(nodePath, daemonScript.getAbsolutePath());
+                List<String> daemonCmd = NodeDetector.buildNodeScriptCommand(
+                        nodePath, daemonScript.getAbsolutePath());
+                ProcessBuilder pb = new ProcessBuilder(daemonCmd);
                 pb.directory(bridgeDir);
 
                 // Configure environment
@@ -126,6 +136,7 @@ public class DaemonBridge {
                 daemonProcess = pb.start();
                 isRunning.set(true);
                 lastSuccessfulStart.set(System.currentTimeMillis());
+                markDaemonActivity();
 
                 LOG.info("[DaemonBridge] Daemon process started, PID: " + daemonProcess.pid());
 
@@ -188,6 +199,7 @@ public class DaemonBridge {
             entry.getValue().onError("Daemon stopped");
         }
         pendingRequests.clear();
+        activeRequestCount.set(0);
 
         // Send shutdown command before closing stdin (allows daemon to flush)
         try {
@@ -217,17 +229,29 @@ public class DaemonBridge {
         // Kill process if still alive and wait for termination
         if (daemonProcess != null && daemonProcess.isAlive()) {
             daemonProcess.destroyForcibly();
-            try { daemonProcess.waitFor(3, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            try {
+                daemonProcess.waitFor(3, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         // Interrupt and join threads
         if (readerThread != null) {
             readerThread.interrupt();
-            try { readerThread.join(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            try {
+                readerThread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
         if (heartbeatThread != null) {
             heartbeatThread.interrupt();
-            try { heartbeatThread.join(2000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            try {
+                heartbeatThread.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         LOG.info("[DaemonBridge] Daemon stopped");
@@ -256,12 +280,15 @@ public class DaemonBridge {
             LOG.debug("[DaemonBridge] Error sending abort command: " + e.getMessage());
         }
 
-        // Complete all pending request futures so Java-side callers unblock
+        // Complete all pending request futures so Java-side callers unblock.
+        // Use onComplete(false) instead of onError() so that user-initiated aborts
+        // are treated as a normal (unsuccessful) completion rather than an error,
+        // matching the graceful handling that Codex uses.
         for (Map.Entry<String, RequestHandler> entry : pendingRequests.entrySet()) {
-            entry.getValue().onError("Request aborted by user");
-            entry.getValue().future.complete(false);
+            entry.getValue().onAbort();
         }
         pendingRequests.clear();
+        activeRequestCount.set(0);
     }
 
     /**
@@ -272,10 +299,27 @@ public class DaemonBridge {
     }
 
     /**
+     * Returns the underlying daemon Process for inspection by NodeProcessRegistry.
+     * May be null when no daemon is running. Callers must NOT destroy/kill through
+     * this reference — always go through stop() to keep state consistent.
+     */
+    public Process getDaemonProcessForInspection() {
+        return daemonProcess;
+    }
+
+    /**
+     * Returns the number of in-flight requests currently being processed by the daemon.
+     * Used by the management panel to indicate daemon load.
+     */
+    public int getActiveRequestCount() {
+        return activeRequestCount.get();
+    }
+
+    /**
      * Ensure the daemon is running, starting it if necessary.
      */
     public boolean ensureRunning() {
-        if (isAlive()) return true;
+        if (isAlive()) { return true; }
         return start();
     }
 
@@ -308,12 +352,22 @@ public class DaemonBridge {
 
         String requestId = String.valueOf(requestIdCounter.incrementAndGet());
         CompletableFuture<Boolean> future = new CompletableFuture<>();
+        boolean countsAsActiveRequest = !"heartbeat".equals(method) && !"status".equals(method);
 
         RequestHandler handler = new RequestHandler(callback, future);
         pendingRequests.put(requestId, handler);
+        if (countsAsActiveRequest) {
+            activeRequestCount.incrementAndGet();
+        }
+        markDaemonActivity();
 
         // Ensure cleanup when future completes (e.g., via timeout or cancellation)
-        future.whenComplete((result, ex) -> pendingRequests.remove(requestId));
+        future.whenComplete((result, ex) -> {
+            pendingRequests.remove(requestId);
+            if (countsAsActiveRequest) {
+                activeRequestCount.updateAndGet(current -> Math.max(0, current - 1));
+            }
+        });
 
         // Build request JSON
         JsonObject request = new JsonObject();
@@ -379,19 +433,25 @@ public class DaemonBridge {
 
     private void startHeartbeatThread() {
         // Initialize heartbeat baseline so the first check doesn't trigger timeout
-        lastHeartbeatResponse.set(System.currentTimeMillis());
+        long now = System.currentTimeMillis();
+        lastHeartbeatResponse.set(now);
+        lastDaemonActivity.set(now);
 
         heartbeatThread = new Thread(() -> {
             while (isRunning.get()) {
                 try {
                     Thread.sleep(HEARTBEAT_INTERVAL_MS);
-                    if (!isAlive()) break;
+                    if (!isAlive()) { break; }
 
                     // Check if daemon is unresponsive (no heartbeat response for too long)
-                    long elapsed = System.currentTimeMillis() - lastHeartbeatResponse.get();
-                    if (elapsed > HEARTBEAT_TIMEOUT_MS) {
-                        LOG.warn("[DaemonBridge] Daemon unresponsive (no heartbeat response for "
-                                + elapsed + "ms), treating as dead");
+                    long currentTime = System.currentTimeMillis();
+                    long heartbeatAgeMs = currentTime - lastHeartbeatResponse.get();
+                    long activityAgeMs = currentTime - lastDaemonActivity.get();
+                    int activeRequests = activeRequestCount.get();
+                    if (shouldTreatAsUnresponsive(heartbeatAgeMs, activityAgeMs, activeRequests)) {
+                        LOG.warn("[DaemonBridge] Daemon unresponsive (heartbeatAgeMs=" + heartbeatAgeMs
+                                + ", activityAgeMs=" + activityAgeMs
+                                + ", activeRequests=" + activeRequests + "), treating as dead");
                         handleDaemonDeath();
                         break;
                     }
@@ -423,6 +483,7 @@ public class DaemonBridge {
     // =========================================================================
 
     private void handleDaemonOutput(String jsonLine) {
+        markDaemonActivity();
         // Skip non-JSON lines (SDK debug output, permission logs, etc.)
         String trimmed = jsonLine.trim();
         if (trimmed.isEmpty() || trimmed.charAt(0) != '{') {
@@ -432,7 +493,7 @@ public class DaemonBridge {
 
         try {
             JsonElement element = JsonParser.parseString(trimmed);
-            if (!element.isJsonObject()) return;
+            if (!element.isJsonObject()) { return; }
             JsonObject obj = element.getAsJsonObject();
 
             // --- Daemon lifecycle events ---
@@ -447,6 +508,7 @@ public class DaemonBridge {
                 if ("heartbeat".equals(type)) {
                     // Heartbeat response — daemon is alive
                     lastHeartbeatResponse.set(System.currentTimeMillis());
+                    markDaemonActivity();
                     return;
                 }
 
@@ -457,11 +519,11 @@ public class DaemonBridge {
             }
 
             // --- Request-tagged output ---
-            if (!obj.has("id")) return;
+            if (!obj.has("id")) { return; }
             String id = obj.get("id").getAsString();
 
             // Skip heartbeat responses
-            if (id.startsWith("hb-")) return;
+            if (id.startsWith("hb-")) { return; }
 
             RequestHandler handler = pendingRequests.get(id);
             if (handler == null) {
@@ -525,6 +587,31 @@ public class DaemonBridge {
                 LOG.info("[DaemonBridge] Daemon shutting down");
                 break;
 
+            case "title_log": {
+                String titleLevel = obj.has("level") ? obj.get("level").getAsString() : "info";
+                String titleMsg = obj.has("message") ? obj.get("message").getAsString() : "";
+                if ("error".equals(titleLevel) || "warn".equals(titleLevel)) {
+                    LOG.warn("[TitleService] " + titleMsg);
+                } else {
+                    LOG.info("[TitleService] " + titleMsg);
+                }
+                break;
+            }
+
+            case "title_generated": {
+                LOG.info("[DaemonBridge] AI title generated: sessionId="
+                        + (obj.has("sessionId") ? obj.get("sessionId").getAsString() : "?")
+                        + ", title=" + (obj.has("title") ? obj.get("title").getAsString() : "?"));
+                for (DaemonEventListener listener : eventListeners) {
+                    try {
+                        listener.onDaemonEvent(event, obj);
+                    } catch (Exception ex) {
+                        LOG.warn("[DaemonBridge] Listener threw while handling " + event, ex);
+                    }
+                }
+                break;
+            }
+
             default:
                 LOG.debug("[DaemonBridge] Unhandled daemon event: " + event);
         }
@@ -535,7 +622,7 @@ public class DaemonBridge {
     // =========================================================================
 
     private void handleDaemonDeath() {
-        if (!isRunning.compareAndSet(true, false)) return;
+        if (!isRunning.compareAndSet(true, false)) { return; }
 
         LOG.warn("[DaemonBridge] Daemon process died");
 
@@ -545,7 +632,11 @@ public class DaemonBridge {
             LOG.info("[DaemonBridge] Forcefully killing unresponsive daemon process (PID: "
                     + oldProcess.pid() + ")");
             oldProcess.destroyForcibly();
-            try { oldProcess.waitFor(2, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            try {
+                oldProcess.waitFor(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         // Fail all pending requests
@@ -553,6 +644,7 @@ public class DaemonBridge {
             entry.getValue().onError("Daemon process died unexpectedly");
         }
         pendingRequests.clear();
+        activeRequestCount.set(0);
 
         // Notify listener
         if (lifecycleListener != null) {
@@ -586,8 +678,39 @@ public class DaemonBridge {
         this.lifecycleListener = listener;
     }
 
+    /**
+     * Register a listener for custom daemon events (e.g., title_generated).
+     * Multiple listeners may coexist; each is invoked on every matching event.
+     * Callers MUST pair this with {@link #removeEventListener} on disposal to
+     * avoid memory leaks.
+     */
+    public void addEventListener(DaemonEventListener listener) {
+        if (listener == null) { return; }
+        eventListeners.add(listener);
+    }
+
+    /**
+     * Remove a previously registered listener. No-op if not registered.
+     */
+    public void removeEventListener(DaemonEventListener listener) {
+        if (listener == null) { return; }
+        eventListeners.remove(listener);
+    }
+
     public boolean isSdkPreloaded() {
         return sdkPreloaded.get();
+    }
+
+    static boolean shouldTreatAsUnresponsive(long heartbeatAgeMs, long activityAgeMs, int activeRequestCount) {
+        if (activeRequestCount <= 0) {
+            return heartbeatAgeMs > HEARTBEAT_TIMEOUT_MS;
+        }
+        long livenessAgeMs = Math.min(heartbeatAgeMs, activityAgeMs);
+        return livenessAgeMs > ACTIVE_REQUEST_HEARTBEAT_TIMEOUT_MS;
+    }
+
+    private void markDaemonActivity() {
+        lastDaemonActivity.set(System.currentTimeMillis());
     }
 
     // =========================================================================
@@ -602,6 +725,16 @@ public class DaemonBridge {
         void onStderr(String text);
         void onError(String error);
         void onComplete(boolean success);
+
+        /**
+         * Called when the user manually aborts the request.
+         * Default implementation delegates to {@link #onComplete(boolean) onComplete(false)}
+         * so that aborts are treated as a graceful (unsuccessful) completion,
+         * not an error.
+         */
+        default void onAbort() {
+            onComplete(false);
+        }
     }
 
     /**
@@ -610,6 +743,13 @@ public class DaemonBridge {
     public interface DaemonLifecycleListener {
         void onDaemonReady();
         void onDaemonDied();
+    }
+
+    /**
+     * Listener for custom daemon events (e.g., title_generated).
+     */
+    public interface DaemonEventListener {
+        void onDaemonEvent(String event, JsonObject data);
     }
 
     /**
@@ -627,6 +767,17 @@ public class DaemonBridge {
         void onError(String error) {
             callback.onError(error);
             future.completeExceptionally(new RuntimeException(error));
+        }
+
+        /**
+         * Handle user-initiated abort gracefully.
+         * Unlike onError, this completes the future normally (with false) so callers
+         * do not see an exception. The DaemonOutputCallback.onAbort() method lets
+         * the downstream handler distinguish aborts from real errors.
+         */
+        void onAbort() {
+            callback.onAbort();
+            future.complete(false);
         }
 
         void onComplete(boolean success) {

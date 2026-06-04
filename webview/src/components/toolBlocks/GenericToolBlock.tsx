@@ -2,11 +2,42 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ToolInput, ToolResultBlock } from '../../types';
 import { useIsToolDenied } from '../../hooks/useIsToolDenied';
+import { useResolvedFileLinkTooltip } from '../../hooks/useResolvedFileLinkTooltip';
 import { openFile } from '../../utils/bridge';
 import { formatParamValue, truncate } from '../../utils/helpers';
 import { getFileIcon, getFolderIcon } from '../../utils/fileIcons';
 import { isCommandToolName, parseCommandType } from '../../utils/toolCommandPath';
 import { getToolLineInfo, resolveToolTarget, summarizeToolCommand, extractPathsFromPatch } from '../../utils/toolPresentation';
+
+const SUMMARY_FILE_STYLE: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  maxWidth: 'fit-content',
+};
+
+const FILE_ICON_STYLE: React.CSSProperties = {
+  marginRight: '4px',
+  display: 'flex',
+  alignItems: 'center',
+  width: '16px',
+  height: '16px',
+};
+
+const PATCH_FILES_CONTAINER_STYLE: React.CSSProperties = {
+  display: 'flex',
+  gap: '8px',
+  flexWrap: 'wrap',
+};
+
+const PATCH_FILE_LINK_STYLE: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+};
+
+const LINE_INFO_STYLE: React.CSSProperties = {
+  marginLeft: '8px',
+  fontSize: '12px',
+};
 
 const CODICON_MAP: Record<string, string> = {
   read: 'codicon-eye',
@@ -149,6 +180,34 @@ interface GenericToolBlockProps {
   toolId?: string;
 }
 
+interface PatchFileLinkProps {
+  path: string;
+}
+
+const PatchFileLink = ({ path }: PatchFileLinkProps) => {
+  const fileName = path.split('/').pop() || path;
+  const ext = fileName.includes('.') ? fileName.split('.').pop() : '';
+  const tooltip = useResolvedFileLinkTooltip(path, path);
+
+  return (
+    <span
+      className="clickable-file"
+      onClick={(e) => {
+        e.stopPropagation();
+        openFile(path);
+      }}
+      {...tooltip}
+      style={PATCH_FILE_LINK_STYLE}
+    >
+      <span
+        style={FILE_ICON_STYLE}
+        dangerouslySetInnerHTML={{ __html: getFileIcon(ext ?? '', fileName) }}
+      />
+      {fileName}
+    </span>
+  );
+};
+
 const GenericToolBlock = ({ name, input, result, toolId }: GenericToolBlockProps) => {
   const { t } = useTranslation();
   const lowerName = (name ?? '').toLowerCase();
@@ -205,7 +264,6 @@ const GenericToolBlock = ({ name, input, result, toolId }: GenericToolBlockProps
   );
 
   const hasExpandableContent = otherParams.length > 0;
-
   const isDirectoryPath = target?.isDirectory ?? false;
   const isFilePath = target?.isFile ?? false;
   const lineInfo = input && target ? getToolLineInfo(input, target) : {};
@@ -231,6 +289,10 @@ const GenericToolBlock = ({ name, input, result, toolId }: GenericToolBlockProps
   };
 
   const tooltipPath = target?.displayPath ?? filePath ?? summary ?? '';
+  const fileLinkTooltip = useResolvedFileLinkTooltip(
+    effectiveIsFile ? filePath : undefined,
+    tooltipPath || undefined,
+  );
 
   // Extract all file paths for apply_patch tool
   const patchContent = lowerName === 'apply_patch'
@@ -240,19 +302,18 @@ const GenericToolBlock = ({ name, input, result, toolId }: GenericToolBlockProps
     : undefined;
   const patchFiles = patchContent ? extractPathsFromPatch(patchContent) : [];
 
+  const headerStyle: React.CSSProperties = {
+    cursor: hasExpandableContent ? 'pointer' : 'default',
+  };
+
   return (
     <div className="task-container">
       <div
         className="task-header"
         onClick={hasExpandableContent ? () => setExpanded((prev) => !prev) : undefined}
-        style={{
-          cursor: hasExpandableContent ? 'pointer' : 'default',
-        }}
+        style={headerStyle}
       >
         <div className="task-title-section">
-          {hasExpandableContent && (
-            <span className={`codicon ${expanded ? 'codicon-chevron-down' : 'codicon-chevron-right'} tool-chevron`} />
-          )}
           <span className={`codicon ${codicon} tool-title-icon`} />
 
           <span className="tool-title-text">
@@ -261,17 +322,13 @@ const GenericToolBlock = ({ name, input, result, toolId }: GenericToolBlockProps
           {summary && patchFiles.length === 0 && (
               <span
                 className={`task-summary-text tool-title-summary ${effectiveIsFile ? 'clickable-file' : ''}`}
-                title={effectiveIsFile ? t('tools.clickToOpen', { filePath: tooltipPath }) : tooltipPath}
                 onClick={effectiveIsFile ? handleFileClick : undefined}
-                style={(effectiveIsFile || isDirectoryPath) ? {
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  maxWidth: 'fit-content'
-                } : undefined}
+                {...(effectiveIsFile ? fileLinkTooltip : {})}
+                style={(effectiveIsFile || isDirectoryPath) ? SUMMARY_FILE_STYLE : undefined}
               >
                 {(effectiveIsFile || isDirectoryPath) && (
                    <span
-                      style={{ marginRight: '4px', display: 'flex', alignItems: 'center', width: '16px', height: '16px' }}
+                      style={FILE_ICON_STYLE}
                       dangerouslySetInnerHTML={{ __html: getFileIconSvg() }}
                    />
                 )}
@@ -279,33 +336,17 @@ const GenericToolBlock = ({ name, input, result, toolId }: GenericToolBlockProps
               </span>
             )}
           {patchFiles.length > 0 && (
-            <span className="tool-title-summary" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {patchFiles.map((path, idx) => {
-                const fileName = path.split('/').pop() || path;
-                const ext = fileName.includes('.') ? fileName.split('.').pop() : '';
-                return (
-                  <span
-                    key={idx}
-                    className="clickable-file"
-                    title={t('tools.clickToOpen', { filePath: path })}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openFile(path);
-                    }}
-                    style={{ display: 'inline-flex', alignItems: 'center' }}
-                  >
-                    <span
-                      style={{ marginRight: '4px', display: 'flex', alignItems: 'center', width: '16px', height: '16px' }}
-                      dangerouslySetInnerHTML={{ __html: getFileIcon(ext ?? '', fileName) }}
-                    />
-                    {fileName}
-                  </span>
-                );
-              })}
+            <span className="tool-title-summary" style={PATCH_FILES_CONTAINER_STYLE}>
+              {patchFiles.map((path, idx) => (
+                <PatchFileLink
+                  key={idx}
+                  path={path}
+                />
+              ))}
             </span>
           )}
           {lineInfo.start && (
-            <span className="tool-title-summary" style={{ marginLeft: '8px', fontSize: '12px' }}>
+            <span className="tool-title-summary" style={LINE_INFO_STYLE}>
               {lineInfo.end && lineInfo.end !== lineInfo.start
                 ? t('tools.lineRange', { start: lineInfo.start, end: lineInfo.end })
                 : t('tools.lineSingle', { line: lineInfo.start })}

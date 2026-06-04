@@ -1,6 +1,6 @@
 package com.github.claudecodegui.session;
 
-import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
@@ -156,6 +156,14 @@ public class SessionSendService {
         return resolvedMode;
     }
 
+    public static String getCodexRuntimeAccessError(String accessMode) {
+        if (CodemossSettingsService.CODEX_RUNTIME_ACCESS_MANAGED.equals(accessMode)
+                || CodemossSettingsService.CODEX_RUNTIME_ACCESS_CLI_LOGIN.equals(accessMode)) {
+            return null;
+        }
+        return ClaudeCodeGuiBundle.message("error.codexLocalAccessNotAuthorized");
+    }
+
     private CompletableFuture<Void> sendToCodex(
             String channelId,
             String input,
@@ -166,6 +174,19 @@ public class SessionSendService {
             String effectivePermissionMode
     ) {
         CodexMessageHandler handler = new CodexMessageHandler(state, callbackFacade.getCallbackHandler());
+        String accessMode = CodemossSettingsService.CODEX_RUNTIME_ACCESS_INACTIVE;
+        try {
+            accessMode = new CodemossSettingsService().getCodexRuntimeAccessMode();
+        } catch (Exception e) {
+            LOG.warn("[Codex] Failed to resolve runtime access mode: " + e.getMessage());
+        }
+
+        String accessError = getCodexRuntimeAccessError(accessMode);
+        if (accessError != null) {
+            handler.onError(accessError);
+            return CompletableFuture.completedFuture(null);
+        }
+
         String contextAppend = contextService.buildCodexContextAppend(openedFilesJson, fileTagPaths);
         String finalInput = (input != null ? input : "") + contextAppend;
 
@@ -221,6 +242,7 @@ public class SessionSendService {
                         agentPrompt,
                         streaming,
                         false,
+                        state.getReasoningEffort(),
                         handler
                 ).thenApply(result -> null);
     }

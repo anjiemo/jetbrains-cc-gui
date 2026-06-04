@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import styles from './style.module.less';
 import { useTranslation } from 'react-i18next';
+import type { DiffThemeMode } from '../../../utils/diffTheme';
+import type { UiFontConfig, CodeFontConfig } from '../hooks/useSettingsBasicActions';
 
 // Preset colors (module-level constants to avoid recreating on each render)
 const DARK_PRESETS = [
@@ -53,6 +55,17 @@ const USER_MSG_LIGHT_PRESETS = [
 
 const DEFAULT_DARK_USER_MSG = '#005fb8';
 const DEFAULT_LIGHT_USER_MSG = '#0078d4';
+const UI_FONT_SELECT_ID = 'settings-ui-font-select';
+const UI_FONT_CUSTOM_PATH_ID = 'settings-ui-font-custom-path';
+const CODE_FONT_SELECT_ID = 'settings-code-font-select';
+const CODE_FONT_CUSTOM_PATH_ID = 'settings-code-font-custom-path';
+const FOLLOW_IDEA_LANGUAGE = '__follow_idea__';
+
+const NODE_PATH_SECTION_STYLE: React.CSSProperties = { marginTop: 12 };
+
+function getSwatchStyle(color: string): React.CSSProperties {
+  return { backgroundColor: color };
+}
 
 const SunIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -91,10 +104,20 @@ export interface AppearanceTabProps {
     fontSize: number;
     lineSpacing: number;
   };
+  uiFontConfig?: UiFontConfig;
+  codeFontConfig?: CodeFontConfig;
+  onUiFontSelectionChange?: (selection: string) => void;
+  onSaveUiFontCustomPath?: (path: string) => void;
+  onBrowseUiFontFile?: () => void;
+  onCodeFontSelectionChange?: (selection: string) => void;
+  onSaveCodeFontCustomPath?: (path: string) => void;
+  onBrowseCodeFontFile?: () => void;
   chatBgColor?: string;
   onChatBgColorChange?: (color: string) => void;
   userMsgColor?: string;
   onUserMsgColorChange?: (color: string) => void;
+  diffTheme?: DiffThemeMode;
+  onDiffThemeChange?: (theme: DiffThemeMode) => void;
 }
 
 const AppearanceTab = ({
@@ -103,16 +126,41 @@ const AppearanceTab = ({
   fontSizeLevel,
   onFontSizeLevelChange,
   editorFontConfig,
+  uiFontConfig,
+  codeFontConfig,
+  onUiFontSelectionChange = () => {},
+  onSaveUiFontCustomPath = () => {},
+  onBrowseUiFontFile = () => {},
+  onCodeFontSelectionChange = () => {},
+  onSaveCodeFontCustomPath = () => {},
+  onBrowseCodeFontFile = () => {},
   chatBgColor = '',
   onChatBgColorChange = () => {},
   userMsgColor = '',
   onUserMsgColorChange = () => {},
+  diffTheme = 'follow',
+  onDiffThemeChange = () => {},
 }: AppearanceTabProps) => {
   const { t, i18n } = useTranslation();
   const colorInputRef = useRef<HTMLInputElement>(null);
   const userMsgColorInputRef = useRef<HTMLInputElement>(null);
   const [hexInput, setHexInput] = useState(chatBgColor || '');
   const [userMsgHexInput, setUserMsgHexInput] = useState(userMsgColor || '');
+  const [selectedUiFontOption, setSelectedUiFontOption] = useState(() => {
+    if (!uiFontConfig || uiFontConfig.mode === 'followEditor') return 'followEditor';
+    return 'customFile';
+  });
+  const [customFontPathDraft, setCustomFontPathDraft] = useState(uiFontConfig?.customFontPath || '');
+  const [selectedCodeFontOption, setSelectedCodeFontOption] = useState(() => {
+    if (!codeFontConfig || codeFontConfig.mode === 'followEditor') return 'followEditor';
+    return 'customFile';
+  });
+  const [customCodeFontPathDraft, setCustomCodeFontPathDraft] = useState(codeFontConfig?.customFontPath || '');
+  const [languageSelection, setLanguageSelection] = useState(() => (
+    localStorage.getItem('languageSelectionMode') === 'followIdea'
+      ? FOLLOW_IDEA_LANGUAGE
+      : (i18n.language || 'zh')
+  ));
 
   useEffect(() => {
     setHexInput(chatBgColor || '');
@@ -121,6 +169,37 @@ const AppearanceTab = ({
   useEffect(() => {
     setUserMsgHexInput(userMsgColor || '');
   }, [userMsgColor]);
+
+  useEffect(() => {
+    if (!uiFontConfig || uiFontConfig.mode === 'followEditor') {
+      setSelectedUiFontOption('followEditor');
+    } else {
+      setSelectedUiFontOption('customFile');
+    }
+    setCustomFontPathDraft(uiFontConfig?.customFontPath || '');
+  }, [uiFontConfig]);
+
+  useEffect(() => {
+    if (!codeFontConfig || codeFontConfig.mode === 'followEditor') {
+      setSelectedCodeFontOption('followEditor');
+    } else {
+      setSelectedCodeFontOption('customFile');
+    }
+    setCustomCodeFontPathDraft(codeFontConfig?.customFontPath || '');
+  }, [codeFontConfig]);
+
+  useEffect(() => {
+    const resync = () => {
+      setLanguageSelection(
+        localStorage.getItem('languageSelectionMode') === 'followIdea'
+          ? FOLLOW_IDEA_LANGUAGE
+          : (i18n.language || 'zh')
+      );
+    };
+    resync();
+    window.addEventListener('language-config-applied', resync);
+    return () => window.removeEventListener('language-config-applied', resync);
+  }, [i18n.language]);
 
   const resolvedTheme = useMemo(() => {
     if (theme !== 'system') return theme;
@@ -191,9 +270,65 @@ const AppearanceTab = ({
     return chatBgColor.toLowerCase() === presetColor.toLowerCase();
   };
 
-  const currentLanguage = i18n.language || 'zh';
+  const hasSavedCustomFont = Boolean(uiFontConfig?.customFontPath);
+  const isCustomUiFontSelected = selectedUiFontOption === 'customFile';
+  const isCustomPathEmpty = customFontPathDraft.trim().length === 0;
+  const currentUiFontDisplayName = uiFontConfig?.displayName || editorFontConfig?.fontFamily || '-';
+  const customFontFileName = uiFontConfig?.customFontPath
+    ? uiFontConfig.customFontPath.split(/[\\/]/).pop()
+    : '';
+  const localizedUiFontWarning = uiFontConfig?.warningCode === 'fontUnavailable'
+      ? t('settings.basic.editorFont.warningUnavailable')
+      : uiFontConfig?.warning;
+  const uiFontHint = localizedUiFontWarning
+    || (uiFontConfig?.effectiveMode === 'customFile'
+      ? t('settings.basic.editorFont.statusCustom', { font: currentUiFontDisplayName })
+      : t('settings.basic.editorFont.statusFollowEditor', {
+        font: uiFontConfig?.fontFamily || currentUiFontDisplayName,
+      }));
+
+  const hasSavedCustomCodeFont = Boolean(codeFontConfig?.customFontPath);
+  const isCustomCodeFontSelected = selectedCodeFontOption === 'customFile';
+  const isCustomCodePathEmpty = customCodeFontPathDraft.trim().length === 0;
+  const currentCodeFontDisplayName = codeFontConfig?.displayName || editorFontConfig?.fontFamily || '-';
+  const customCodeFontFileName = codeFontConfig?.customFontPath
+    ? codeFontConfig.customFontPath.split(/[\\/]/).pop()
+    : '';
+  const localizedCodeFontWarning = codeFontConfig?.warningCode === 'fontUnavailable'
+    ? t('settings.basic.codeFont.warningUnavailable')
+    : codeFontConfig?.warning;
+  const codeFontHint = localizedCodeFontWarning
+    || (codeFontConfig?.effectiveMode === 'customFile'
+      ? t('settings.basic.codeFont.statusCustom', { font: currentCodeFontDisplayName })
+      : t('settings.basic.codeFont.statusFollowEditor', {
+        font: editorFontConfig?.fontFamily || currentCodeFontDisplayName,
+      }));
+
+  const diffThemeOptions: Array<{ value: DiffThemeMode; label: string; desc: string }> = [
+    {
+      value: 'follow',
+      label: t('settings.basic.diffTheme.follow'),
+      desc: t('settings.basic.diffTheme.followDesc'),
+    },
+    {
+      value: 'editor',
+      label: t('settings.basic.diffTheme.editor'),
+      desc: t('settings.basic.diffTheme.editorDesc'),
+    },
+    {
+      value: 'light',
+      label: t('settings.basic.diffTheme.light'),
+      desc: t('settings.basic.diffTheme.lightDesc'),
+    },
+    {
+      value: 'soft-dark',
+      label: t('settings.basic.diffTheme.softDark'),
+      desc: t('settings.basic.diffTheme.softDarkDesc'),
+    },
+  ];
 
   const languageOptions = [
+    { value: FOLLOW_IDEA_LANGUAGE, label: 'settings.basic.language.followIde' },
     { value: 'zh', label: 'settings.basic.language.simplifiedChinese' },
     { value: 'zh-TW', label: 'settings.basic.language.traditionalChinese' },
     { value: 'en', label: 'settings.basic.language.english' },
@@ -203,13 +338,47 @@ const AppearanceTab = ({
     { value: 'ja', label: 'settings.basic.language.japanese' },
     { value: 'ru', label: 'settings.basic.language.russian' },
     { value: 'ko', label: 'settings.basic.language.korean' },
+    { value: 'pt-BR', label: 'settings.basic.language.portuguese' },
   ];
 
   const handleLanguageChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     const language = event.target.value;
+    // Optimistic UI update. Java owns the persisted config and pushes the
+    // authoritative state back via applyIdeaLanguageConfig, which is the
+    // single writer for localStorage language keys.
+    setLanguageSelection(language);
+
+    if (language === FOLLOW_IDEA_LANGUAGE) {
+      if (window.sendToJava) {
+        window.sendToJava('clear_user_language:');
+      }
+      return;
+    }
+
     i18n.changeLanguage(language);
-    localStorage.setItem('language', language);
-    localStorage.setItem('languageManuallySet', 'true');
+    if (window.sendToJava) {
+      window.sendToJava(`set_user_language:${JSON.stringify({ language })}`);
+    }
+  };
+
+  const handleUiFontSelectionChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const nextSelection = event.target.value;
+    setSelectedUiFontOption(nextSelection);
+
+    if (nextSelection === 'customFile') {
+      // Only notify backend when a custom font path was previously saved;
+      // otherwise the user must first enter/browse a path and click Save.
+      if (hasSavedCustomFont) {
+        onUiFontSelectionChange(nextSelection);
+      }
+      return;
+    }
+
+    onUiFontSelectionChange(nextSelection);
+  };
+
+  const handleSaveCustomUiFontPath = () => {
+    onSaveUiFontCustomPath(customFontPathDraft.trim());
   };
 
   return (
@@ -262,7 +431,7 @@ const AppearanceTab = ({
         </div>
         <select
           className={styles.languageSelect}
-          value={currentLanguage}
+          value={languageSelection}
           onChange={handleLanguageChange}
         >
           {languageOptions.map((option) => (
@@ -293,19 +462,174 @@ const AppearanceTab = ({
         </select>
       </div>
 
-      {/* IDEA editor font display - read only */}
+      {/* UI font selector */}
       <div className={styles.editorFontSection}>
         <div className={styles.fieldHeader}>
           <span className="codicon codicon-symbol-text" />
-          <span className={styles.fieldLabel}>{t('settings.basic.editorFont.label')}</span>
+          <label className={styles.fieldLabel} htmlFor={UI_FONT_SELECT_ID}>
+            {t('settings.basic.editorFont.label')}
+          </label>
         </div>
-        <div className={styles.fontInfoDisplay}>
-          {editorFontConfig?.fontFamily || '-'}
-        </div>
+        <select
+          id={UI_FONT_SELECT_ID}
+          aria-label={t('settings.basic.editorFont.label')}
+          className={styles.languageSelect}
+          value={selectedUiFontOption}
+          onChange={handleUiFontSelectionChange}
+        >
+          <option value="followEditor">
+            {t('settings.basic.editorFont.followOption', { font: uiFontConfig?.fontFamily || '-' })}
+          </option>
+          <option value="customFile">
+            {customFontFileName
+              ? `${t('settings.basic.editorFont.customOption')} / ${customFontFileName}`
+              : t('settings.basic.editorFont.customOption')}
+          </option>
+        </select>
+
+        {isCustomUiFontSelected && (
+          <div className={styles.nodePathSection} style={NODE_PATH_SECTION_STYLE}>
+            <div className={styles.fieldHeader}>
+              <span className="codicon codicon-file-media" />
+              <label className={styles.fieldLabel} htmlFor={UI_FONT_CUSTOM_PATH_ID}>
+                {t('settings.basic.editorFont.customPathLabel')}
+              </label>
+            </div>
+            <div className={styles.nodePathInputWrapper}>
+              <input
+                id={UI_FONT_CUSTOM_PATH_ID}
+                type="text"
+                className={styles.nodePathInput}
+                placeholder={t('settings.basic.editorFont.customPathPlaceholder')}
+                value={customFontPathDraft}
+                onChange={(event) => setCustomFontPathDraft(event.target.value)}
+              />
+              <button
+                type="button"
+                className={styles.saveBtn}
+                onClick={onBrowseUiFontFile}
+                aria-label={t('settings.basic.editorFont.browse')}
+                title={t('settings.basic.editorFont.browse')}
+              >
+                <span className="codicon codicon-folder-opened" />
+              </button>
+              <button
+                type="button"
+                className={styles.saveBtn}
+                onClick={handleSaveCustomUiFontPath}
+                disabled={isCustomPathEmpty}
+              >
+                {t('common.save')}
+              </button>
+            </div>
+          </div>
+        )}
+
         <small className={styles.formHint}>
           <span className="codicon codicon-info" />
-          <span>{t('settings.basic.editorFont.hint')}</span>
+          <span>{uiFontHint}</span>
         </small>
+      </div>
+
+      {/* Code font selector */}
+      <div className={styles.editorFontSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-code" />
+          <label className={styles.fieldLabel} htmlFor={CODE_FONT_SELECT_ID}>
+            {t('settings.basic.codeFont.label')}
+          </label>
+        </div>
+        <select
+          id={CODE_FONT_SELECT_ID}
+          aria-label={t('settings.basic.codeFont.label')}
+          className={styles.languageSelect}
+          value={selectedCodeFontOption}
+          onChange={(event) => {
+            const nextSelection = event.target.value;
+            setSelectedCodeFontOption(nextSelection);
+
+            if (nextSelection === 'customFile' && hasSavedCustomCodeFont) {
+              onCodeFontSelectionChange(nextSelection);
+              return;
+            }
+
+            if (nextSelection === 'followEditor') {
+              onCodeFontSelectionChange(nextSelection);
+            }
+          }}
+        >
+          <option value="followEditor">
+            {t('settings.basic.codeFont.followOption', { font: editorFontConfig?.fontFamily || '-' })}
+          </option>
+          <option value="customFile">
+            {customCodeFontFileName
+              ? `${t('settings.basic.codeFont.customOption')} / ${customCodeFontFileName}`
+              : t('settings.basic.codeFont.customOption')}
+          </option>
+        </select>
+
+        {isCustomCodeFontSelected && (
+          <div className={styles.nodePathSection} style={NODE_PATH_SECTION_STYLE}>
+            <div className={styles.fieldHeader}>
+              <span className="codicon codicon-file-media" />
+              <label className={styles.fieldLabel} htmlFor={CODE_FONT_CUSTOM_PATH_ID}>
+                {t('settings.basic.codeFont.customPathLabel')}
+              </label>
+            </div>
+            <div className={styles.nodePathInputWrapper}>
+              <input
+                id={CODE_FONT_CUSTOM_PATH_ID}
+                type="text"
+                className={styles.nodePathInput}
+                placeholder={t('settings.basic.codeFont.customPathPlaceholder')}
+                value={customCodeFontPathDraft}
+                onChange={(event) => setCustomCodeFontPathDraft(event.target.value)}
+              />
+              <button
+                type="button"
+                className={styles.saveBtn}
+                onClick={onBrowseCodeFontFile}
+                aria-label={t('settings.basic.codeFont.browse')}
+                title={t('settings.basic.codeFont.browse')}
+              >
+                <span className="codicon codicon-folder-opened" />
+              </button>
+              <button
+                type="button"
+                className={styles.saveBtn}
+                onClick={() => onSaveCodeFontCustomPath(customCodeFontPathDraft.trim())}
+                disabled={isCustomCodePathEmpty}
+              >
+                {t('common.save')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{codeFontHint}</span>
+        </small>
+      </div>
+
+      {/* Diff theme */}
+      <div className={styles.themeSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-diff" />
+          <span className={styles.fieldLabel}>{t('settings.basic.diffTheme.label')}</span>
+        </div>
+
+        <select
+          className={styles.languageSelect}
+          value={diffTheme}
+          onChange={(e) => onDiffThemeChange(e.target.value as DiffThemeMode)}
+        >
+          {diffThemeOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label} — {option.desc}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Chat background color */}
@@ -334,7 +658,7 @@ const AppearanceTab = ({
             >
               <div
                 className={styles.colorSwatchInner}
-                style={{ backgroundColor: preset.color }}
+                style={getSwatchStyle(preset.color)}
               />
             </div>
           ))}
@@ -348,7 +672,7 @@ const AppearanceTab = ({
           >
             <div
               className={styles.colorPickerPreview}
-              style={{ backgroundColor: chatBgColor || defaultBgColor }}
+              style={getSwatchStyle(chatBgColor || defaultBgColor)}
             />
             <input
               ref={colorInputRef}
@@ -410,7 +734,7 @@ const AppearanceTab = ({
             >
               <div
                 className={styles.colorSwatchInner}
-                style={{ backgroundColor: preset.color }}
+                style={getSwatchStyle(preset.color)}
               />
             </div>
           ))}
@@ -424,7 +748,7 @@ const AppearanceTab = ({
           >
             <div
               className={styles.colorPickerPreview}
-              style={{ backgroundColor: userMsgColor || defaultUserMsgColor }}
+              style={getSwatchStyle(userMsgColor || defaultUserMsgColor)}
             />
             <input
               ref={userMsgColorInputRef}

@@ -1,5 +1,20 @@
 // hooks/useSettingsBasicActions.ts
 import { useState, useEffect, useCallback } from 'react';
+export type { UiFontConfig, CodeFontConfig } from '../../../types/uiFontConfig';
+import type { UiFontConfig, CodeFontConfig } from '../../../types/uiFontConfig';
+import type { CommitAiConfig, CommitAiProvider } from '../../../types/aiFeatureConfig';
+import { DEFAULT_COMMIT_AI_CONFIG } from '../../../types/aiFeatureConfig';
+import type { PromptEnhancerConfig, PromptEnhancerProvider } from '../../../types/promptEnhancer';
+import { DEFAULT_PROMPT_ENHANCER_CONFIG } from '../../../types/promptEnhancer';
+import {
+  DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS,
+  clampPermissionDialogTimeoutSeconds,
+} from '../../../utils/permissionDialogTimeout';
+import {
+  getSkipNewSessionConfirm,
+  SKIP_NEW_SESSION_CONFIRM_EVENT,
+  type SkipNewSessionConfirmChangedDetail,
+} from '../../../utils/skipNewSessionConfirm';
 
 const sendToJava = (message: string) => {
   if (window.sendToJava) {
@@ -14,6 +29,8 @@ export interface UseSettingsBasicActionsProps {
   onSendShortcutChangeProp?: (shortcut: 'enter' | 'cmdEnter') => void;
   autoOpenFileEnabledProp?: boolean;
   onAutoOpenFileEnabledChangeProp?: (enabled: boolean) => void;
+  permissionDialogTimeoutSecondsProp?: number;
+  onPermissionDialogTimeoutChangeProp?: (seconds: number) => void;
 }
 
 export interface UseSettingsBasicActionsReturn {
@@ -33,6 +50,8 @@ export interface UseSettingsBasicActionsReturn {
         lineSpacing: number;
       }
     | undefined;
+  uiFontConfig: UiFontConfig | undefined;
+  codeFontConfig: CodeFontConfig | undefined;
   /** Streaming enabled state (prefers prop over local state) */
   streamingEnabled: boolean;
   localStreamingEnabled: boolean;
@@ -45,18 +64,34 @@ export interface UseSettingsBasicActionsReturn {
   localAutoOpenFileEnabled: boolean;
   commitPrompt: string;
   savingCommitPrompt: boolean;
+  projectCommitPrompt: string;
+  savingProjectCommitPrompt: boolean;
   soundNotificationEnabled: boolean;
   soundOnlyWhenUnfocused: boolean;
   selectedSound: string;
   customSoundPath: string;
   diffExpandedByDefault: boolean;
   historyCompletionEnabled: boolean;
+  /** Whether to skip the "create new session with existing messages" confirm dialog. */
+  skipNewSessionConfirm: boolean;
+  commitGenerationEnabled: boolean;
+  aiTitleGenerationEnabled: boolean;
+  statusBarWidgetEnabled: boolean;
+  taskCompletionNotificationEnabled: boolean;
+  commitAiConfig: CommitAiConfig;
+  promptEnhancerConfig: PromptEnhancerConfig;
 
   // =========================================================================
   // Handler functions (public API for components)
   // =========================================================================
   handleSaveNodePath: () => void;
   handleSaveWorkingDirectory: () => void;
+  handleUiFontSelectionChange: (selection: string) => void;
+  handleSaveUiFontCustomPath: (path: string) => void;
+  handleBrowseUiFontFile: () => void;
+  handleCodeFontSelectionChange: (selection: string) => void;
+  handleSaveCodeFontCustomPath: (path: string) => void;
+  handleBrowseCodeFontFile: () => void;
   handleStreamingEnabledChange: (enabled: boolean) => void;
   handleCodexSandboxModeChange: (mode: 'workspace-write' | 'danger-full-access') => void;
   handleSendShortcutChange: (shortcut: 'enter' | 'cmdEnter') => void;
@@ -69,6 +104,19 @@ export interface UseSettingsBasicActionsReturn {
   handleTestSound: () => void;
   handleBrowseSound: () => void;
   handleSaveCommitPrompt: () => void;
+  handleSaveProjectCommitPrompt: () => void;
+  handleCommitGenerationEnabledChange: (enabled: boolean) => void;
+  handleAiTitleGenerationEnabledChange: (enabled: boolean) => void;
+  handleStatusBarWidgetEnabledChange: (enabled: boolean) => void;
+  handleTaskCompletionNotificationEnabledChange: (enabled: boolean) => void;
+  permissionDialogTimeoutSeconds: number;
+  handlePermissionDialogTimeoutChange: (seconds: number) => void;
+  handleCommitAiProviderChange: (provider: CommitAiProvider) => void;
+  handleCommitAiModelChange: (model: string) => void;
+  handleCommitAiResetToDefault: () => void;
+  handlePromptEnhancerProviderChange: (provider: PromptEnhancerProvider) => void;
+  handlePromptEnhancerModelChange: (model: string) => void;
+  handlePromptEnhancerResetToDefault: () => void;
 
   // =========================================================================
   // @internal — State setters used only by useSettingsWindowCallbacks.
@@ -86,21 +134,32 @@ export interface UseSettingsBasicActionsReturn {
           fontFamily: string;
           fontSize: number;
           lineSpacing: number;
-        }
+      }
       | undefined
   ) => void;
+  /** @internal */ setUiFontConfig: (config: UiFontConfig | undefined) => void;
+  /** @internal */ setCodeFontConfig: (config: CodeFontConfig | undefined) => void;
   /** @internal */ setLocalStreamingEnabled: (enabled: boolean) => void;
   /** @internal */ setCodexSandboxMode: (mode: 'workspace-write' | 'danger-full-access') => void;
   /** @internal */ setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
   /** @internal */ setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
   /** @internal */ setCommitPrompt: (prompt: string) => void;
   /** @internal */ setSavingCommitPrompt: (saving: boolean) => void;
+  /** @internal */ setProjectCommitPrompt: (prompt: string) => void;
+  /** @internal */ setSavingProjectCommitPrompt: (saving: boolean) => void;
   /** @internal */ setSoundNotificationEnabled: (enabled: boolean) => void;
   /** @internal */ setSoundOnlyWhenUnfocused: (enabled: boolean) => void;
   /** @internal */ setSelectedSound: (soundId: string) => void;
   /** @internal */ setCustomSoundPath: (path: string) => void;
   /** @internal */ setDiffExpandedByDefault: (expanded: boolean) => void;
   /** @internal */ setHistoryCompletionEnabled: (enabled: boolean) => void;
+  /** @internal */ setSkipNewSessionConfirm: (enabled: boolean) => void;
+  /** @internal */ setCommitGenerationEnabled: (enabled: boolean) => void;
+  /** @internal */ setAiTitleGenerationEnabled: (enabled: boolean) => void;
+  /** @internal */ setStatusBarWidgetEnabled: (enabled: boolean) => void;
+  /** @internal */ setTaskCompletionNotificationEnabled: (enabled: boolean) => void;
+  /** @internal */ setCommitAiConfig: (config: CommitAiConfig) => void;
+  /** @internal */ setPromptEnhancerConfig: (config: PromptEnhancerConfig) => void;
 }
 
 export function useSettingsBasicActions({
@@ -110,6 +169,8 @@ export function useSettingsBasicActions({
   onSendShortcutChangeProp,
   autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChangeProp,
+  permissionDialogTimeoutSecondsProp,
+  onPermissionDialogTimeoutChangeProp,
 }: UseSettingsBasicActionsProps): UseSettingsBasicActionsReturn {
   // Node.js path
   const [nodePath, setNodePath] = useState('');
@@ -130,6 +191,8 @@ export function useSettingsBasicActions({
       }
     | undefined
   >();
+  const [uiFontConfig, setUiFontConfig] = useState<UiFontConfig | undefined>();
+  const [codeFontConfig, setCodeFontConfig] = useState<CodeFontConfig | undefined>();
 
   // Streaming configuration - prefer props, fallback to local state
   const [localStreamingEnabled, setLocalStreamingEnabled] = useState<boolean>(false);
@@ -151,6 +214,10 @@ export function useSettingsBasicActions({
   const [commitPrompt, setCommitPrompt] = useState('');
   const [savingCommitPrompt, setSavingCommitPrompt] = useState(false);
 
+  // Project-level commit AI prompt configuration
+  const [projectCommitPrompt, setProjectCommitPrompt] = useState('');
+  const [savingProjectCommitPrompt, setSavingProjectCommitPrompt] = useState(false);
+
   // Sound notification configuration
   const [soundNotificationEnabled, setSoundNotificationEnabled] = useState<boolean>(false);
   const [soundOnlyWhenUnfocused, setSoundOnlyWhenUnfocused] = useState<boolean>(false);
@@ -171,6 +238,49 @@ export function useSettingsBasicActions({
     const saved = localStorage.getItem('historyCompletionEnabled');
     return saved !== 'false'; // Enabled by default
   });
+
+  // "Skip new-session confirm dialog" preference (localStorage-only, default: false).
+  // Synced bidirectionally with the dialog checkbox via CustomEvent so toggling
+  // either surface (dialog or settings page) updates the other immediately.
+  const [skipNewSessionConfirm, setSkipNewSessionConfirm] = useState<boolean>(() =>
+    getSkipNewSessionConfirm()
+  );
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const custom = event as CustomEvent<SkipNewSessionConfirmChangedDetail>;
+      if (custom.detail && typeof custom.detail.enabled === 'boolean') {
+        setSkipNewSessionConfirm(custom.detail.enabled);
+      }
+    };
+    window.addEventListener(SKIP_NEW_SESSION_CONFIRM_EVENT, handler);
+    return () => window.removeEventListener(SKIP_NEW_SESSION_CONFIRM_EVENT, handler);
+  }, []);
+
+  // AI commit generation toggle (default: true)
+  const [commitGenerationEnabled, setCommitGenerationEnabled] = useState<boolean>(true);
+
+  // AI session title generation toggle (default: true)
+  const [aiTitleGenerationEnabled, setAiTitleGenerationEnabled] = useState<boolean>(true);
+
+  // Status bar widget toggle (default: true)
+  const [statusBarWidgetEnabled, setStatusBarWidgetEnabled] = useState<boolean>(true);
+
+  // Task completion notification toggle (default: false, opt-in feature)
+  const [taskCompletionNotificationEnabled, setTaskCompletionNotificationEnabled] = useState<boolean>(false);
+
+  // Permission dialog timeout — owned by App.tsx; we treat the prop as authoritative.
+  // We intentionally do NOT keep a local copy: it would be dead state because the
+  // prop is always provided in production, and a divergent local copy could be read
+  // by accident in future refactors.
+  const permissionDialogTimeoutSeconds =
+    permissionDialogTimeoutSecondsProp ?? DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS;
+
+  const [commitAiConfig, setCommitAiConfig] = useState<CommitAiConfig>(
+    DEFAULT_COMMIT_AI_CONFIG
+  );
+  const [promptEnhancerConfig, setPromptEnhancerConfig] = useState<PromptEnhancerConfig>(
+    DEFAULT_PROMPT_ENHANCER_CONFIG
+  );
 
   // Diff expanded by default handler
   useEffect(() => {
@@ -194,6 +304,56 @@ export function useSettingsBasicActions({
     const payload = { customWorkingDir: (workingDirectory || '').trim() };
     sendToJava(`set_working_directory:${JSON.stringify(payload)}`);
   }, [workingDirectory]);
+
+  const handleUiFontSelectionChange = useCallback((selection: string) => {
+    if (selection === 'followEditor') {
+      sendToJava(`set_ui_font_config:${JSON.stringify({ mode: 'followEditor' })}`);
+      return;
+    }
+
+    if (selection === 'customFile' && uiFontConfig?.customFontPath) {
+      sendToJava(`set_ui_font_config:${JSON.stringify({
+        mode: 'customFile',
+        customFontPath: uiFontConfig.customFontPath,
+      })}`);
+    }
+  }, [uiFontConfig?.customFontPath]);
+
+  const handleSaveUiFontCustomPath = useCallback((path: string) => {
+    sendToJava(`set_ui_font_config:${JSON.stringify({
+      mode: 'customFile',
+      customFontPath: path,
+    })}`);
+  }, []);
+
+  const handleBrowseUiFontFile = useCallback(() => {
+    sendToJava('browse_ui_font_file:');
+  }, []);
+
+  const handleCodeFontSelectionChange = useCallback((selection: string) => {
+    if (selection === 'followEditor') {
+      sendToJava(`set_code_font_config:${JSON.stringify({ mode: 'followEditor' })}`);
+      return;
+    }
+
+    if (selection === 'customFile' && codeFontConfig?.customFontPath) {
+      sendToJava(`set_code_font_config:${JSON.stringify({
+        mode: 'customFile',
+        customFontPath: codeFontConfig.customFontPath,
+      })}`);
+    }
+  }, [codeFontConfig?.customFontPath]);
+
+  const handleSaveCodeFontCustomPath = useCallback((path: string) => {
+    sendToJava(`set_code_font_config:${JSON.stringify({
+      mode: 'customFile',
+      customFontPath: path,
+    })}`);
+  }, []);
+
+  const handleBrowseCodeFontFile = useCallback(() => {
+    sendToJava('browse_code_font_file:');
+  }, []);
 
   // Streaming toggle change handler
   const handleStreamingEnabledChange = useCallback((enabled: boolean) => {
@@ -283,12 +443,154 @@ export function useSettingsBasicActions({
     sendToJava('browse_sound_file:');
   }, []);
 
+  // AI commit generation toggle change handler
+  const handleCommitGenerationEnabledChange = useCallback((enabled: boolean) => {
+    setCommitGenerationEnabled(enabled);
+    const payload = { commitGenerationEnabled: enabled };
+    sendToJava(`set_commit_generation_enabled:${JSON.stringify(payload)}`);
+  }, []);
+
+  // AI session title generation toggle change handler
+  const handleAiTitleGenerationEnabledChange = useCallback((enabled: boolean) => {
+    setAiTitleGenerationEnabled(enabled);
+    const payload = { aiTitleGenerationEnabled: enabled };
+    sendToJava(`set_ai_title_generation_enabled:${JSON.stringify(payload)}`);
+  }, []);
+
+  // Status bar widget toggle change handler
+  const handleStatusBarWidgetEnabledChange = useCallback((enabled: boolean) => {
+    setStatusBarWidgetEnabled(enabled);
+    const payload = { statusBarWidgetEnabled: enabled };
+    sendToJava(`set_status_bar_widget_enabled:${JSON.stringify(payload)}`);
+  }, []);
+
+  // Task completion notification toggle change handler
+  const handleTaskCompletionNotificationEnabledChange = useCallback((enabled: boolean) => {
+    setTaskCompletionNotificationEnabled(enabled);
+    const payload = { taskCompletionNotificationEnabled: enabled };
+    sendToJava(`set_task_completion_notification_enabled:${JSON.stringify(payload)}`);
+  }, []);
+
+  // Permission dialog timeout change handler
+  const handlePermissionDialogTimeoutChange = useCallback((seconds: number) => {
+    const clamped = clampPermissionDialogTimeoutSeconds(seconds);
+    // App.tsx owns the canonical state and provides the callback in production.
+    onPermissionDialogTimeoutChangeProp?.(clamped);
+    const payload = { permissionDialogTimeoutSeconds: clamped };
+    sendToJava(`set_permission_dialog_timeout:${JSON.stringify(payload)}`);
+  }, [onPermissionDialogTimeoutChangeProp]);
+
+  const handleCommitAiProviderChange = useCallback((provider: CommitAiProvider) => {
+    const providerAvailable = commitAiConfig.availability[provider];
+    const nextConfig: CommitAiConfig = {
+      ...commitAiConfig,
+      provider,
+      effectiveProvider: providerAvailable ? provider : null,
+      resolutionSource: providerAvailable ? 'manual' : 'unavailable',
+    };
+    setCommitAiConfig(nextConfig);
+    sendToJava(`set_commit_ai_config:${JSON.stringify({
+      provider,
+      models: nextConfig.models,
+    })}`);
+  }, [commitAiConfig]);
+
+  const handleCommitAiModelChange = useCallback((model: string) => {
+    const activeProvider = commitAiConfig.provider ?? commitAiConfig.effectiveProvider ?? 'codex';
+    const nextConfig: CommitAiConfig = {
+      ...commitAiConfig,
+      models: {
+        ...commitAiConfig.models,
+        [activeProvider]: model,
+      },
+    };
+    setCommitAiConfig(nextConfig);
+    sendToJava(`set_commit_ai_config:${JSON.stringify({
+      provider: commitAiConfig.provider,
+      models: nextConfig.models,
+    })}`);
+  }, [commitAiConfig]);
+
+  const handleCommitAiResetToDefault = useCallback(() => {
+    const nextConfig: CommitAiConfig = {
+      ...commitAiConfig,
+      provider: null,
+      effectiveProvider: commitAiConfig.availability.codex
+        ? 'codex'
+        : (commitAiConfig.availability.claude ? 'claude' : null),
+      resolutionSource: commitAiConfig.availability.codex || commitAiConfig.availability.claude
+        ? 'auto'
+        : 'unavailable',
+    };
+    setCommitAiConfig(nextConfig);
+    sendToJava(`set_commit_ai_config:${JSON.stringify({
+      provider: null,
+      models: nextConfig.models,
+    })}`);
+  }, [commitAiConfig]);
+
+  const handlePromptEnhancerProviderChange = useCallback((provider: PromptEnhancerProvider) => {
+    const providerAvailable = promptEnhancerConfig.availability[provider];
+    const nextConfig: PromptEnhancerConfig = {
+      ...promptEnhancerConfig,
+      provider,
+      effectiveProvider: providerAvailable ? provider : null,
+      resolutionSource: providerAvailable ? 'manual' : 'unavailable',
+    };
+    setPromptEnhancerConfig(nextConfig);
+    sendToJava(`set_prompt_enhancer_config:${JSON.stringify({
+      provider,
+      models: nextConfig.models,
+    })}`);
+  }, [promptEnhancerConfig]);
+
+  const handlePromptEnhancerModelChange = useCallback((model: string) => {
+    const activeProvider = promptEnhancerConfig.provider ?? promptEnhancerConfig.effectiveProvider ?? 'claude';
+    const nextConfig: PromptEnhancerConfig = {
+      ...promptEnhancerConfig,
+      models: {
+        ...promptEnhancerConfig.models,
+        [activeProvider]: model,
+      },
+    };
+    setPromptEnhancerConfig(nextConfig);
+    sendToJava(`set_prompt_enhancer_config:${JSON.stringify({
+      provider: promptEnhancerConfig.provider,
+      models: nextConfig.models,
+    })}`);
+  }, [promptEnhancerConfig]);
+
+  const handlePromptEnhancerResetToDefault = useCallback(() => {
+    const nextConfig: PromptEnhancerConfig = {
+      ...promptEnhancerConfig,
+      provider: null,
+      effectiveProvider: promptEnhancerConfig.availability.codex
+        ? 'codex'
+        : (promptEnhancerConfig.availability.claude ? 'claude' : null),
+      resolutionSource: promptEnhancerConfig.availability.codex || promptEnhancerConfig.availability.claude
+        ? 'auto'
+        : 'unavailable',
+    };
+    setPromptEnhancerConfig(nextConfig);
+    sendToJava(`set_prompt_enhancer_config:${JSON.stringify({
+      provider: null,
+      models: nextConfig.models,
+    })}`);
+  }, [promptEnhancerConfig]);
+
   // Commit AI prompt save handler
   const handleSaveCommitPrompt = useCallback(() => {
     setSavingCommitPrompt(true);
     const payload = { prompt: commitPrompt };
     sendToJava(`set_commit_prompt:${JSON.stringify(payload)}`);
   }, [commitPrompt]);
+
+  // Project-level commit AI prompt save handler
+  const handleSaveProjectCommitPrompt = useCallback(() => {
+    setSavingProjectCommitPrompt(true);
+    const payload = { prompt: projectCommitPrompt };
+    sendToJava(`set_project_commit_prompt:${JSON.stringify(payload)}`);
+  }, [projectCommitPrompt]);
 
   return {
     nodePath,
@@ -305,6 +607,10 @@ export function useSettingsBasicActions({
     setSavingWorkingDirectory,
     editorFontConfig,
     setEditorFontConfig,
+    uiFontConfig,
+    setUiFontConfig,
+    codeFontConfig,
+    setCodeFontConfig,
     localStreamingEnabled,
     setLocalStreamingEnabled,
     streamingEnabled,
@@ -332,8 +638,16 @@ export function useSettingsBasicActions({
     setDiffExpandedByDefault,
     historyCompletionEnabled,
     setHistoryCompletionEnabled,
+    skipNewSessionConfirm,
+    setSkipNewSessionConfirm,
     handleSaveNodePath,
     handleSaveWorkingDirectory,
+    handleUiFontSelectionChange,
+    handleSaveUiFontCustomPath,
+    handleBrowseUiFontFile,
+    handleCodeFontSelectionChange,
+    handleSaveCodeFontCustomPath,
+    handleBrowseCodeFontFile,
     handleStreamingEnabledChange,
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
@@ -346,5 +660,34 @@ export function useSettingsBasicActions({
     handleTestSound,
     handleBrowseSound,
     handleSaveCommitPrompt,
+    projectCommitPrompt,
+    setProjectCommitPrompt,
+    savingProjectCommitPrompt,
+    setSavingProjectCommitPrompt,
+    handleSaveProjectCommitPrompt,
+    commitGenerationEnabled,
+    setCommitGenerationEnabled,
+    handleCommitGenerationEnabledChange,
+    aiTitleGenerationEnabled,
+    setAiTitleGenerationEnabled,
+    handleAiTitleGenerationEnabledChange,
+    statusBarWidgetEnabled,
+    setStatusBarWidgetEnabled,
+    handleStatusBarWidgetEnabledChange,
+    taskCompletionNotificationEnabled,
+    setTaskCompletionNotificationEnabled,
+    handleTaskCompletionNotificationEnabledChange,
+    permissionDialogTimeoutSeconds,
+    handlePermissionDialogTimeoutChange,
+    commitAiConfig,
+    setCommitAiConfig,
+    handleCommitAiProviderChange,
+    handleCommitAiModelChange,
+    handleCommitAiResetToDefault,
+    promptEnhancerConfig,
+    setPromptEnhancerConfig,
+    handlePromptEnhancerProviderChange,
+    handlePromptEnhancerModelChange,
+    handlePromptEnhancerResetToDefault,
   };
 }

@@ -1,12 +1,12 @@
 package com.github.claudecodegui.session;
 
-import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.handler.PermissionHandler;
 import com.github.claudecodegui.permission.PermissionRequest;
 import com.github.claudecodegui.util.JsUtils;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.vfs.VirtualFileManager;
+import com.intellij.util.Alarm;
 
 import java.util.List;
 import java.util.function.BooleanSupplier;
@@ -19,6 +19,8 @@ import java.util.function.BooleanSupplier;
 public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
 
     private static final Logger LOG = Logger.getInstance(SessionCallbackAdapter.class);
+    /** Throttle interval targeting ~30fps to balance responsiveness with UI thread load. */
+    private static final int DELTA_THROTTLE_MS = 33;
 
     /**
      * Callback interface for JavaScript calls from session events.
@@ -32,7 +34,12 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
     private final PermissionHandler permissionHandler;
     private final BooleanSupplier slashCommandsFetchedSupplier;
     private final Runnable streamEndCallback;
+    private final StreamDeltaThrottler contentDeltaThrottler;
+    private final StreamDeltaThrottler thinkingDeltaThrottler;
+    private final Alarm streamEndFallbackAlarm;
     private volatile boolean active = true;
+    /** Guards against duplicate onStreamEnd delivery from dual-path dispatch. */
+    private volatile boolean streamEndSignalSent = false;
 
     public SessionCallbackAdapter(
             StreamMessageCoalescer streamCoalescer,
@@ -46,10 +53,30 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         this.permissionHandler = permissionHandler;
         this.slashCommandsFetchedSupplier = slashCommandsFetchedSupplier;
         this.streamEndCallback = streamEndCallback;
+        this.contentDeltaThrottler = new StreamDeltaThrottler(
+                DELTA_THROTTLE_MS,
+                delta -> {
+                    if (!isInactive()) {
+                        jsTarget.callJavaScript("onContentDelta", JsUtils.escapeJs(delta));
+                    }
+                }
+        );
+        this.thinkingDeltaThrottler = new StreamDeltaThrottler(
+                DELTA_THROTTLE_MS,
+                delta -> {
+                    if (!isInactive()) {
+                        jsTarget.callJavaScript("onThinkingDelta", JsUtils.escapeJs(delta));
+                    }
+                }
+        );
+        this.streamEndFallbackAlarm = new Alarm(Alarm.ThreadToUse.SWING_THREAD);
     }
 
     public void deactivate() {
         active = false;
+        contentDeltaThrottler.dispose();
+        thinkingDeltaThrottler.dispose();
+        streamEndFallbackAlarm.cancelAllRequests();
     }
 
     private boolean isInactive() {
@@ -164,6 +191,15 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
     @Override
     public void onSummaryReceived(String summary) {
         LOG.debug("Summary received: " + (summary != null ? summary.substring(0, Math.min(50, summary.length())) : "null"));
+        if (isInactive() || summary == null || summary.trim().isEmpty()) {
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (isInactive()) {
+                return;
+            }
+            jsTarget.callJavaScript("showSummary", JsUtils.escapeJs(summary));
+        });
     }
 
     @Override
@@ -178,6 +214,11 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         if (isInactive()) {
             return;
         }
+        // Cancel any stale fallback alarm from the previous turn to prevent
+        // it from firing during the new turn's streaming phase.
+        streamEndFallbackAlarm.cancelAllRequests();
+        contentDeltaThrottler.reset();
+        thinkingDeltaThrottler.reset();
         streamCoalescer.onStreamStart();
         ApplicationManager.getApplication().invokeLater(() -> {
             if (isInactive()) {
@@ -194,18 +235,83 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         if (isInactive()) {
             return;
         }
-        streamCoalescer.onStreamEnd();
-        streamCoalescer.flush(() -> {
-            if (isInactive()) {
+        // Reset the signal guard so this turn's dual-path dispatch can proceed.
+        // Thread-safety: this runs on the process reader thread; the callbacks that
+        // read/write streamEndSignalSent all run on EDT (via invokeLater or Alarm).
+        // The reset happens-before flush() schedules any callbacks, so no race exists.
+        streamEndSignalSent = false;
+
+        // Each step is wrapped in safeRun so that a failure in one step
+        // (e.g., flushNow throwing due to a disposed throttler, or JCEF
+        // rejecting a large payload) does not prevent the critical
+        // onStreamEnd signal from reaching the frontend.
+        safeRun("contentDeltaThrottler.flushNow", contentDeltaThrottler::flushNow);
+        safeRun("thinkingDeltaThrottler.flushNow", thinkingDeltaThrottler::flushNow);
+        safeRun("streamCoalescer.onStreamEnd", streamCoalescer::onStreamEnd);
+
+        // ── Dual-path onStreamEnd delivery ──
+        //
+        // Primary path: chain onStreamEnd inside the flush callback. The callback
+        // runs on the EDT *after* the updateMessages JS call has been dispatched,
+        // guaranteeing the frontend receives the final message snapshot before the
+        // stream-end signal.
+        //
+        // Fallback path: an independent Alarm fires after 300ms. This covers the
+        // scenario where the flush's 3-layer async pipeline fails silently (JCEF
+        // large payload rejection, disposed browser, JSON serialization OOM).
+        //
+        // The frontend's onStreamEnd is idempotent (per-turn guard), so receiving
+        // both signals is harmless — only the first takes effect.
+
+        // Primary: ordered delivery via flush callback
+        streamCoalescer.flush(sequence -> {
+            if (streamEndSignalSent) {
                 return;
             }
-            jsTarget.callJavaScript("onStreamEnd");
-            jsTarget.callJavaScript("showLoading", "false");
-            if (streamEndCallback != null) {
-                streamEndCallback.run();
-            }
-            LOG.debug("Stream ended - flushed messages before notifying frontend");
+            streamEndSignalSent = true;
+            streamEndFallbackAlarm.cancelAllRequests();
+            sendStreamEndToFrontend(sequence);
         });
+
+        // Fallback: independent delivery after timeout
+        streamEndFallbackAlarm.cancelAllRequests();
+        streamEndFallbackAlarm.addRequest(() -> {
+            if (streamEndSignalSent || isInactive()) {
+                return;
+            }
+            streamEndSignalSent = true;
+            LOG.warn("Stream end signal delivered via fallback (primary flush callback did not fire within 300ms)");
+            sendStreamEndToFrontend(-1);
+        }, 300);
+    }
+
+    /**
+     * Send the onStreamEnd signal and associated cleanup to the frontend.
+     * Called from either the primary (flush callback) or fallback (Alarm) path.
+     *
+     * @param sequence the flush sequence number, or -1 if fired from fallback
+     */
+    private void sendStreamEndToFrontend(long sequence) {
+        if (isInactive()) {
+            LOG.debug("Skipping sendStreamEndToFrontend — adapter deactivated (sequence=" + sequence + ")");
+            return;
+        }
+        safeRun("callJavaScript(onStreamEnd)", () ->
+                jsTarget.callJavaScript("onStreamEnd", String.valueOf(sequence)));
+        safeRun("callJavaScript(showLoading, false)", () ->
+                jsTarget.callJavaScript("showLoading", "false"));
+        if (streamEndCallback != null) {
+            safeRun("streamEndCallback", streamEndCallback);
+        }
+        LOG.debug("Stream ended - notified frontend (sequence=" + sequence + ")");
+    }
+
+    private static void safeRun(String label, Runnable action) {
+        try {
+            action.run();
+        } catch (Exception e) {
+            LOG.warn(label + " failed: " + e.getMessage(), e);
+        }
     }
 
     @Override
@@ -213,7 +319,7 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         if (isInactive()) {
             return;
         }
-        jsTarget.callJavaScript("onContentDelta", JsUtils.escapeJs(delta));
+        contentDeltaThrottler.append(delta);
     }
 
     @Override
@@ -221,7 +327,24 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         if (isInactive()) {
             return;
         }
-        jsTarget.callJavaScript("onThinkingDelta", JsUtils.escapeJs(delta));
+        thinkingDeltaThrottler.append(delta);
+    }
+
+    @Override
+    public void onBlockReset() {
+        if (isInactive()) {
+            return;
+        }
+        // Reset throttlers for the new turn's deltas
+        contentDeltaThrottler.reset();
+        thinkingDeltaThrottler.reset();
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (isInactive()) {
+                return;
+            }
+            jsTarget.callJavaScript("onBlockReset");
+            LOG.debug("Block reset sent to frontend - streaming refs cleared");
+        });
     }
 
     @Override
@@ -241,10 +364,23 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         });
     }
 
+    @Override
+    public void onUserMessageUuidPatched(String content, String uuid) {
+        if (isInactive()) {
+            return;
+        }
+        jsTarget.callJavaScript("patchMessageUuid", JsUtils.escapeJs(content), JsUtils.escapeJs(uuid));
+    }
+
     /**
      * Dispose internal resources. Call when the parent window is disposed.
      */
     public void dispose() {
-        // No-op: no resources to dispose currently
+        deactivate();
+        try {
+            streamEndFallbackAlarm.dispose();
+        } catch (Exception e) {
+            LOG.warn("Failed to dispose streamEndFallbackAlarm: " + e.getMessage());
+        }
     }
 }

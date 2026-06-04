@@ -3,7 +3,7 @@
  * Handles plain text messages and multimodal messages with attachments.
  */
 
-import { isCustomBaseUrl, loadClaudeSettings, setupApiKey } from '../../config/api-config.js';
+import { isCustomBaseUrl, loadClaudeSettings, setupApiKey, buildCliEnv } from '../../config/api-config.js';
 import { selectWorkingDirectory } from '../../utils/path-utils.js';
 import { mapModelIdToSdkName, resolveModelFromSettings, setModelEnvironmentVariables } from '../../utils/model-utils.js';
 import { AsyncStream } from '../../utils/async-stream.js';
@@ -27,10 +27,20 @@ import {
   emitUsageTag,
   buildConfigErrorPayload
 } from './message-utils.js';
-import { createPreToolUseHook } from './message-permission.js';
+import { createPreToolUseHook } from './permission-mode.js';
+import { loadMcpServersConfigAsRecord } from './mcp-status/config-loader.js';
 import { setActiveQueryResult } from './message-session-registry.js';
+import { normalizeStreamDelta, resolveSnapshotDelta, resetTurnBlockState } from './stream-delta-normalizer.js';
+import { generateSessionTitle } from '../session-title-service.js';
 
 // ========== Internal helpers for deduplication ==========
+
+const SUPPORTED_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+
+function normalizeReasoningEffort(reasoningEffort) {
+  const effort = typeof reasoningEffort === 'string' ? reasoningEffort.trim() : '';
+  return SUPPORTED_EFFORT_LEVELS.has(effort) ? effort : null;
+}
 
 /**
  * Resolve Extended Thinking configuration from settings.
@@ -51,13 +61,14 @@ function resolveThinkingConfig(settings) {
 /**
  * Build query options object shared by both send functions.
  */
-function buildQueryOptions({ workingDirectory, permissionMode, sdkModelName, maxThinkingTokens, streamingEnabled, systemPromptAppend, preToolUseHook, sdkStderrLines }) {
+function buildQueryOptions({ workingDirectory, permissionMode, sdkModelName, maxThinkingTokens, streamingEnabled, systemPromptAppend, preToolUseHook, sdkStderrLines, mcpServers }) {
   return {
     cwd: workingDirectory,
     permissionMode,
     model: sdkModelName,
     maxTurns: 100,
     enableFileCheckpointing: true,
+    env: buildCliEnv(),
     ...(maxThinkingTokens !== undefined && { maxThinkingTokens }),
     ...(streamingEnabled && { includePartialMessages: true }),
     additionalDirectories: Array.from(
@@ -66,6 +77,7 @@ function buildQueryOptions({ workingDirectory, permissionMode, sdkModelName, max
     canUseTool,
     hooks: { PreToolUse: [{ hooks: [preToolUseHook] }] },
     settingSources: ['user', 'project', 'local'],
+    ...(mcpServers && { mcpServers }),
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
@@ -140,10 +152,21 @@ function processStreamMessage(msg, state, logPrefix) {
       // - message_start: ACCUMULATE usage across all turns (not reset!)
       // - message_delta: incremental output_tokens updates
       // - The accumulatedUsage represents the cumulative total across all turns in multi-turn tool use.
-      if (event.type === 'message_start' && event.message?.usage) {
-        // IMPORTANT: Must use mergeUsage(state.accumulatedUsage, ...) to accumulate across turns.
-        // Using mergeUsage(null, ...) would reset and only show the last turn's usage.
-        state.accumulatedUsage = mergeUsage(state.accumulatedUsage, event.message.usage);
+      if (event.type === 'message_start') {
+        // Turn boundary: re-numbered content blocks. Clear the index-keyed block
+        // maps so the prior turn's accumulator / locked stream-mode cannot corrupt
+        // or duplicate this turn's index-0 block (see resetTurnBlockState). Mirrors
+        // stream-event-processor.js — both streaming paths must reset identically.
+        resetTurnBlockState(state);
+        // Emit BLOCK_RESET — mirrors stream-event-processor.js, see there for rationale.
+        if (state.streamingEnabled) {
+          process.stdout.write('[BLOCK_RESET]\n');
+        }
+        if (event.message?.usage) {
+          // IMPORTANT: Must use mergeUsage(state.accumulatedUsage, ...) to accumulate across turns.
+          // Using mergeUsage(null, ...) would reset and only show the last turn's usage.
+          state.accumulatedUsage = mergeUsage(state.accumulatedUsage, event.message.usage);
+        }
       }
       if (event.type === 'message_delta' && event.usage) {
         state.accumulatedUsage = mergeUsage(state.accumulatedUsage, event.usage);
@@ -151,11 +174,17 @@ function processStreamMessage(msg, state, logPrefix) {
       }
       if (event.type === 'content_block_delta' && event.delta) {
         if (event.delta.type === 'text_delta' && event.delta.text) {
-          process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(event.delta.text)}\n`);
-          state.lastAssistantContent += event.delta.text;
+          const delta = normalizeStreamDelta(state, 'text', event.index, event.delta.text);
+          if (delta) {
+            process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
+            state.lastAssistantContent += delta;
+          }
         } else if (event.delta.type === 'thinking_delta' && event.delta.thinking) {
-          process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(event.delta.thinking)}\n`);
-          state.lastThinkingContent += event.delta.thinking;
+          const delta = normalizeStreamDelta(state, 'thinking', event.index, event.delta.thinking);
+          if (delta) {
+            process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
+            state.lastThinkingContent += delta;
+          }
         }
       }
       if (event.type === 'content_block_start' && event.content_block?.type === 'thinking') {
@@ -177,11 +206,12 @@ function processStreamMessage(msg, state, logPrefix) {
   if (msg.type === 'assistant') {
     const content = msg.message?.content;
     if (Array.isArray(content)) {
-      for (const block of content) {
+      for (let i = 0; i < content.length; i += 1) {
+        const block = content[i];
         if (block.type === 'text') {
-          emitTextDelta(block.text || '', state);
+          emitTextDelta(block.text || '', state, i);
         } else if (block.type === 'thinking') {
-          emitThinkingDelta(block.thinking || block.text || '', state);
+          emitThinkingDelta(block.thinking || block.text || '', state, i);
         } else if (block.type === 'tool_use') {
           console.log('[TOOL_USE]', JSON.stringify({ id: block.id, name: block.name }));
         }
@@ -225,35 +255,40 @@ function processStreamMessage(msg, state, logPrefix) {
 }
 
 /** Emit text content delta with streaming fallback support. */
-function emitTextDelta(currentText, state) {
-  if (state.streamingEnabled && !state.hasStreamEvents && currentText.length > state.lastAssistantContent.length) {
-    const delta = currentText.substring(state.lastAssistantContent.length);
-    if (delta) process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
-    state.lastAssistantContent = currentText;
-  } else if (state.streamingEnabled && state.hasStreamEvents) {
-    if (currentText.length > state.lastAssistantContent.length) state.lastAssistantContent = currentText;
-  } else if (!state.streamingEnabled) {
+function emitTextDelta(currentText, state, blockIndex = 0) {
+  if (!state.streamingEnabled) {
     console.log('[CONTENT]', truncateErrorContent(currentText));
+    return;
   }
+  // Single-source the delta through the normalizer (see resolveSnapshotDelta).
+  // Emit gate (unchanged from the tail-fill fix):
+  //   - !hasStreamEvents: pre-stream fallback, emit the whole computed delta
+  //   - hasStreamEvents && hadPrevious: genuine tail-fill / snapshot correction
+  //   - hasStreamEvents && !hadPrevious: stream will deliver this block, suppress
+  const { delta, hadPrevious } = resolveSnapshotDelta(state, 'text', blockIndex, currentText);
+  if (delta && (!state.hasStreamEvents || hadPrevious)) {
+    process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
+  }
+  state.lastAssistantContent = currentText;
 }
 
 /** Emit thinking content delta with streaming fallback support. */
-function emitThinkingDelta(thinkingText, state) {
-  if (state.streamingEnabled && !state.hasStreamEvents && thinkingText.length > state.lastThinkingContent.length) {
-    const delta = thinkingText.substring(state.lastThinkingContent.length);
-    if (delta) process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
-    state.lastThinkingContent = thinkingText;
-  } else if (state.streamingEnabled && state.hasStreamEvents) {
-    if (thinkingText.length > state.lastThinkingContent.length) state.lastThinkingContent = thinkingText;
-  } else if (!state.streamingEnabled) {
+function emitThinkingDelta(thinkingText, state, blockIndex = 0) {
+  if (!state.streamingEnabled) {
     console.log('[THINKING]', thinkingText);
+    return;
   }
+  const { delta, hadPrevious } = resolveSnapshotDelta(state, 'thinking', blockIndex, thinkingText);
+  if (delta && (!state.hasStreamEvents || hadPrevious)) {
+    process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
+  }
+  state.lastThinkingContent = thinkingText;
 }
 
 /**
  * Execute a query call with auto-retry logic for transient API errors.
  */
-async function executeWithRetry({ createQueryResult, streamingEnabled, resumeSessionId, workingDirectory, logPrefix, outerStreamState }) {
+async function executeWithRetry({ createQueryResult, streamingEnabled, resumeSessionId, workingDirectory, logPrefix, outerStreamState, userMessage }) {
   let retryAttempt = 0;
   let lastRetryError = null;
   const lp = logPrefix ? ` ${logPrefix}` : '';
@@ -310,6 +345,12 @@ async function executeWithRetry({ createQueryResult, streamingEnabled, resumeSes
       outerStreamState.streamStarted = state.streamStarted;
       console.log('[MESSAGE_END]');
       console.log(JSON.stringify({ success: true, sessionId: state.currentSessionId }));
+
+      // Fire-and-forget: generate AI title for new sessions (not resumes)
+      if (userMessage && state.currentSessionId && !resumeSessionId) {
+        void generateSessionTitle(userMessage, state.currentSessionId, workingDirectory);
+      }
+
       break;
 
     } catch (retryError) {
@@ -387,7 +428,7 @@ function handleSendError(error, streamState, sdkStderrLines) {
  * @param {string} agentPrompt - Agent prompt (optional)
  * @param {boolean} streaming - Whether to enable streaming (optional, defaults to config value)
  */
-export async function sendMessage(message, resumeSessionId = null, cwd = null, permissionMode = null, model = null, openedFiles = null, agentPrompt = null, streaming = null) {
+export async function sendMessage(message, resumeSessionId = null, cwd = null, permissionMode = null, model = null, openedFiles = null, agentPrompt = null, streaming = null, disableThinking = false, reasoningEffort = null) {
   console.log('[DIAG] ========== sendMessage() START ==========');
   console.log('[DIAG] params:', { msgLen: message ? message.length : 0, resumeSessionId: resumeSessionId || '(new)', cwd, permissionMode, model });
 
@@ -395,8 +436,6 @@ export async function sendMessage(message, resumeSessionId = null, cwd = null, p
   let streamingEnabled = false;
   const outerStreamState = { streamStarted: false, streamEnded: false, accumulatedUsage: null };
   try {
-    process.env.CLAUDE_CODE_ENTRYPOINT = process.env.CLAUDE_CODE_ENTRYPOINT || 'sdk-ts';
-
     const { baseUrl, apiKeySource, baseUrlSource } = setupApiKey();
     if (isCustomBaseUrl(baseUrl)) {
       console.log('[DEBUG] Custom Base URL detected:', baseUrl);
@@ -417,12 +456,21 @@ export async function sendMessage(message, resumeSessionId = null, cwd = null, p
     const systemPromptAppend = buildSystemPromptAppend(openedFiles, agentPrompt, message);
 
     const effectivePermissionMode = (!permissionMode || permissionMode === '') ? 'default' : permissionMode;
-    const { alwaysThinkingEnabled, maxThinkingTokens } = resolveThinkingConfig(settings);
+    const normalizedReasoningEffort = normalizeReasoningEffort(reasoningEffort);
+    const { alwaysThinkingEnabled, maxThinkingTokens: configuredMaxThinkingTokens } = resolveThinkingConfig(settings);
+    // maxThinkingTokens and reasoningEffort are mutually exclusive
+    const maxThinkingTokens = (alwaysThinkingEnabled && !normalizedReasoningEffort) ? configuredMaxThinkingTokens : undefined;
     streamingEnabled = streaming != null ? streaming : (settings?.streamingEnabled ?? false);
-    console.log('[DEBUG] Config:', { effectivePermissionMode, alwaysThinkingEnabled, maxThinkingTokens, streamingEnabled });
+    console.log('[DEBUG] Config:', { effectivePermissionMode, alwaysThinkingEnabled, maxThinkingTokens, streamingEnabled, reasoningEffort: normalizedReasoningEffort });
 
     const preToolUseHook = createPreToolUseHook(effectivePermissionMode, workingDirectory);
-    const options = buildQueryOptions({ workingDirectory, permissionMode: effectivePermissionMode, sdkModelName, maxThinkingTokens, streamingEnabled, systemPromptAppend, preToolUseHook, sdkStderrLines });
+    const mcpServers = await loadMcpServersConfigAsRecord(workingDirectory);
+    const options = buildQueryOptions({ workingDirectory, permissionMode: effectivePermissionMode, sdkModelName, maxThinkingTokens, streamingEnabled, systemPromptAppend, preToolUseHook, sdkStderrLines, mcpServers });
+
+    if (normalizedReasoningEffort) {
+      options.effort = normalizedReasoningEffort;
+      console.log('[DEBUG] Set SDK effort:', normalizedReasoningEffort);
+    }
 
     await prepareSessionResume(options, resumeSessionId, workingDirectory);
 
@@ -434,7 +482,8 @@ export async function sendMessage(message, resumeSessionId = null, cwd = null, p
       resumeSessionId,
       workingDirectory,
       logPrefix: '',
-      outerStreamState
+      outerStreamState,
+      userMessage: message
     });
 
   } catch (error) {
@@ -456,8 +505,6 @@ export async function sendMessageWithAttachments(message, resumeSessionId = null
   let streamingEnabled = false;
   const outerStreamState = { streamStarted: false, streamEnded: false, accumulatedUsage: null };
   try {
-    process.env.CLAUDE_CODE_ENTRYPOINT = process.env.CLAUDE_CODE_ENTRYPOINT || 'sdk-ts';
-
     setupApiKey();
     console.log('[MESSAGE_START]');
 
@@ -470,27 +517,36 @@ export async function sendMessageWithAttachments(message, resumeSessionId = null
 
     const systemPromptAppend = buildSystemPromptAppend(openedFiles, agentPrompt, message);
 
-    const contentBlocks = buildContentBlocks(attachments, message);
-    const userMessage = {
-      type: 'user', session_id: '', parent_tool_use_id: null,
-      message: { role: 'user', content: contentBlocks }
-    };
-
     const sdkModelName = mapModelIdToSdkName(model);
     const settings = loadClaudeSettings();
     const resolvedAttachModel = resolveModelFromSettings(model, settings?.env);
     console.log('[DEBUG] (withAttachments) Model:', model, '->', resolvedAttachModel);
     setModelEnvironmentVariables(resolvedAttachModel, model);
 
+    const contentBlocks = await buildContentBlocks(attachments, message, resolvedAttachModel);
+    const userMessage = {
+      type: 'user', session_id: '', parent_tool_use_id: null,
+      message: { role: 'user', content: contentBlocks }
+    };
+
     const normalizedPermissionMode = (!permissionMode || permissionMode === '') ? 'default' : permissionMode;
     const preToolUseHook = createPreToolUseHook(normalizedPermissionMode, workingDirectory);
 
-    const { alwaysThinkingEnabled, maxThinkingTokens } = resolveThinkingConfig(settings);
+    const { alwaysThinkingEnabled, maxThinkingTokens: configuredMaxThinkingTokens } = resolveThinkingConfig(settings);
+    const reasoningEffort = normalizeReasoningEffort(stdinData?.reasoningEffort || null);
+    // maxThinkingTokens and reasoningEffort are mutually exclusive
+    const maxThinkingTokens = (alwaysThinkingEnabled && !reasoningEffort) ? configuredMaxThinkingTokens : undefined;
     const streamingParam = stdinData?.streaming;
     streamingEnabled = streamingParam != null ? streamingParam : (settings?.streamingEnabled ?? false);
-    console.log('[DEBUG] (withAttachments) Config:', { normalizedPermissionMode, alwaysThinkingEnabled, maxThinkingTokens, streamingEnabled });
+    console.log('[DEBUG] (withAttachments) Config:', { normalizedPermissionMode, alwaysThinkingEnabled, maxThinkingTokens, streamingEnabled, reasoningEffort });
 
-    const options = buildQueryOptions({ workingDirectory, permissionMode: normalizedPermissionMode, sdkModelName, maxThinkingTokens, streamingEnabled, systemPromptAppend, preToolUseHook, sdkStderrLines });
+    const mcpServers = await loadMcpServersConfigAsRecord(workingDirectory);
+    const options = buildQueryOptions({ workingDirectory, permissionMode: normalizedPermissionMode, sdkModelName, maxThinkingTokens, streamingEnabled, systemPromptAppend, preToolUseHook, sdkStderrLines, mcpServers });
+
+    if (reasoningEffort) {
+      options.effort = reasoningEffort;
+      console.log('[DEBUG] (withAttachments) Set SDK effort:', reasoningEffort);
+    }
 
     await prepareSessionResume(options, resumeSessionId, workingDirectory);
 
@@ -508,7 +564,8 @@ export async function sendMessageWithAttachments(message, resumeSessionId = null
       resumeSessionId,
       workingDirectory,
       logPrefix: '(withAttachments)',
-      outerStreamState
+      outerStreamState,
+      userMessage: message
     });
 
   } catch (error) {

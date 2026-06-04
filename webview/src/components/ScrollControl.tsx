@@ -21,7 +21,7 @@ export const ScrollControl = memo(({ containerRef, inputAreaRef }: ScrollControl
   const [visible, setVisible] = useState(false);
   const [direction, setDirection] = useState<'up' | 'down'>('down');
   const [bottomOffset, setBottomOffset] = useState(120);
-  const hideTimerRef = useRef<number | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const THRESHOLD = 100; // Distance from bottom threshold (pixels)
   const HIDE_DELAY = 1500; // Delay before hiding after scrolling stops (milliseconds)
@@ -200,10 +200,13 @@ export const ScrollControl = memo(({ containerRef, inputAreaRef }: ScrollControl
 
   if (!visible) return null;
 
+  const buttonStyle: React.CSSProperties = { bottom: `${bottomOffset}px` };
+  const svgStyle: React.CSSProperties = { transform: direction === 'up' ? 'rotate(180deg)' : 'none' };
+
   return (
     <button
       className="scroll-control-button"
-      style={{ bottom: `${bottomOffset}px` }}
+      style={buttonStyle}
       onClick={handleClick}
       aria-label={direction === 'up' ? t('chat.backToTop') : t('chat.backToBottom')}
       title={direction === 'up' ? t('chat.backToTop') : t('chat.backToBottom')}
@@ -217,7 +220,7 @@ export const ScrollControl = memo(({ containerRef, inputAreaRef }: ScrollControl
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
-        style={{ transform: direction === 'up' ? 'rotate(180deg)' : 'none' }}
+        style={svgStyle}
       >
         <path d="M12 5v14M19 12l-7 7-7-7" />
       </svg>

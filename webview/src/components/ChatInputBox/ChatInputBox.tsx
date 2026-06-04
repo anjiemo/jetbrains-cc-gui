@@ -2,6 +2,7 @@ import {
   forwardRef,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -34,12 +35,14 @@ import {
   useChatInputCompletionsCoordinator,
   useChatInputSelectionController,
   useOpenSourceBannerState,
+  useResetAttachmentsOnSessionChange,
   useSpaceKeyListener,
   useResizableChatInputBox,
 } from './hooks/index.js';
 import { debounce } from './utils/debounce.js';
 import { perfTimer } from '../../utils/debug.js';
 import { DEBOUNCE_TIMING } from '../../constants/performance.js';
+import { SessionContext } from '../../contexts/SessionContext.js';
 import { ContextMenu } from '../ContextMenu';
 import { useContextMenu, copySelection, pasteAtCursor, insertNewline } from '../../hooks/useContextMenu.js';
 import './styles.css';
@@ -76,7 +79,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       onModeSelect,
       onModelSelect,
       onProviderSelect,
-      reasoningEffort = 'medium',
+      reasoningEffort = 'high',
       onReasoningChange,
       activeFile,
       selectedLines,
@@ -103,6 +106,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       onRemoveFromQueue,
       autoOpenFileEnabled,
       onAutoOpenFileEnabledChange,
+      longContextEnabled = true,
+      onLongContextChange,
     }: ChatInputBoxProps,
     ref: React.ForwardedRef<ChatInputBoxHandle>
   ) => {
@@ -119,6 +124,21 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       externalAttachments,
       onAddAttachment,
       onRemoveAttachment,
+    });
+
+    // Reset draft attachments + clear JCEF ghosting when the session changes, so
+    // attachments don't drift into a new conversation and leave stale thumbnails.
+    // SessionContext is read null-safely so this component still mounts in tests
+    // without a SessionProvider.
+    const sessionCtx = useContext(SessionContext);
+    const clearInternalAttachments = useCallback(() => {
+      setInternalAttachments([]);
+      clearAttachmentsDraft?.();
+    }, [setInternalAttachments, clearAttachmentsDraft]);
+    useResetAttachmentsOnSessionChange({
+      currentSessionId: sessionCtx?.currentSessionId ?? null,
+      isControlled: externalAttachments !== undefined,
+      clearInternalAttachments,
     });
 
     // Input element refs and state
@@ -404,7 +424,6 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
     } = usePromptEnhancer({
       editableRef,
       getTextContent,
-      selectedModel,
       setHasContent,
       onInput,
     });
@@ -562,6 +581,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
         onClick={focusInput}
         ref={containerRef}
         style={containerStyle}
+        onMouseOver={handleMouseOver}
+        onMouseLeave={handleMouseLeave}
       >
         <ResizeHandles getHandleProps={getHandleProps} nudge={nudge} />
 
@@ -599,8 +620,6 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
         <div
           ref={editableWrapperRef}
           className="input-editable-wrapper"
-          onMouseOver={handleMouseOver}
-          onMouseLeave={handleMouseLeave}
           style={editableWrapperStyle}
         >
           <div
@@ -697,6 +716,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
           onOpenAgentSettings={onOpenAgentSettings}
           onAddModel={onOpenModelSettings}
           onClearAgent={() => onAgentSelect?.(null)}
+          longContextEnabled={longContextEnabled}
+          onLongContextChange={onLongContextChange}
           fileCompletion={fileCompletion}
           commandCompletion={commandCompletion}
           agentCompletion={agentCompletion}

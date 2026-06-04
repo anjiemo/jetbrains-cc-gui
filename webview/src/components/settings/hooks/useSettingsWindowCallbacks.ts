@@ -4,8 +4,17 @@ import { useTranslation } from 'react-i18next';
 import type { ProviderConfig, CodexProviderConfig } from '../../../types/provider';
 import type { AgentConfig } from '../../../types/agent';
 import type { PromptConfig } from '../../../types/prompt';
+import type { CommitAiConfig } from '../../../types/aiFeatureConfig';
+import type { UiFontConfig, CodeFontConfig } from './useSettingsBasicActions';
+import type { PromptEnhancerConfig } from '../../../types/promptEnhancer';
 import type { AlertType } from '../../AlertDialog';
 import type { ToastMessage } from '../../Toast';
+import {
+  subscribeActiveCodexProvider,
+  subscribeActiveProvider,
+  subscribeCodexProviderList,
+  subscribeProviderList,
+} from '../../../utils/runtimeProviderCapabilities';
 
 const sendToJava = (message: string) => {
   if (window.sendToJava) {
@@ -23,7 +32,13 @@ export interface SettingsWindowCallbacksDeps {
   setSavingWorkingDirectory: (saving: boolean) => void;
   setCommitPrompt: (prompt: string) => void;
   setSavingCommitPrompt: (saving: boolean) => void;
+  setCommitAiConfig: (config: CommitAiConfig) => void;
+  setPromptEnhancerConfig: (config: PromptEnhancerConfig) => void;
+  setProjectCommitPrompt: (prompt: string) => void;
+  setSavingProjectCommitPrompt: (saving: boolean) => void;
   setEditorFontConfig: (config: { fontFamily: string; fontSize: number; lineSpacing: number } | undefined) => void;
+  setUiFontConfig: (config: UiFontConfig | undefined) => void;
+  setCodeFontConfig: (config: CodeFontConfig | undefined) => void;
   setIdeTheme: (theme: 'light' | 'dark' | null) => void;
   setLocalStreamingEnabled: (enabled: boolean) => void;
   setCodexSandboxMode?: (mode: 'workspace-write' | 'danger-full-access') => void;
@@ -31,6 +46,11 @@ export interface SettingsWindowCallbacksDeps {
   setLoading: (loading: boolean) => void;
   setCodexLoading: (loading: boolean) => void;
   setCodexConfigLoading: (loading: boolean) => void;
+  // AI feature toggle setters
+  setCommitGenerationEnabled?: (enabled: boolean) => void;
+  setAiTitleGenerationEnabled?: (enabled: boolean) => void;
+  setStatusBarWidgetEnabled?: (enabled: boolean) => void;
+  setTaskCompletionNotificationEnabled?: (enabled: boolean) => void;
   // Sound notification setters
   setSoundNotificationEnabled?: (enabled: boolean) => void;
   setSoundOnlyWhenUnfocused?: (enabled: boolean) => void;
@@ -83,8 +103,10 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
   useEffect(() => {
     const d = () => depsRef.current;
 
-    // Provider callbacks
-    window.updateProviders = (jsonStr: string) => {
+    // Provider callbacks - subscribe to the registry instead of overriding
+    // window callbacks directly. This keeps behavior deterministic when
+    // multiple consumers (e.g. RuntimeProviderSelect) are mounted.
+    const unsubscribeProviders = subscribeProviderList((jsonStr: string) => {
       try {
         const providersList: ProviderConfig[] = JSON.parse(jsonStr);
         d().updateProviders(providersList);
@@ -92,9 +114,9 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         console.error('[SettingsView] Failed to parse providers:', error);
         d().setLoading(false);
       }
-    };
+    });
 
-    window.updateActiveProvider = (jsonStr: string) => {
+    const unsubscribeActiveProvider = subscribeActiveProvider((jsonStr: string) => {
       try {
         const activeProvider: ProviderConfig = JSON.parse(jsonStr);
         if (activeProvider) {
@@ -103,7 +125,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       } catch (error) {
         console.error('[SettingsView] Failed to parse active provider:', error);
       }
-    };
+    });
 
     window.showError = (message: string) => {
       d().showAlert('error', t('toast.operationFailed'), message);
@@ -111,6 +133,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       d().setSavingNodePath(false);
       d().setSavingWorkingDirectory(false);
       d().setSavingCommitPrompt(false);
+      d().setSavingProjectCommitPrompt(false);
     };
 
     window.showSwitchSuccess = (message: string) => {
@@ -161,6 +184,26 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         d().setEditorFontConfig(config);
       } catch (error) {
         console.error('[SettingsView] Failed to parse editor font config:', error);
+      }
+    };
+
+    window.onUiFontConfigReceived = (jsonStr: string) => {
+      try {
+        const config = JSON.parse(jsonStr);
+        d().setUiFontConfig(config);
+        window.applyUiFontConfig?.(config);
+      } catch {
+        // Silently ignore malformed UI font config from backend
+      }
+    };
+
+    window.onCodeFontConfigReceived = (jsonStr: string) => {
+      try {
+        const config = JSON.parse(jsonStr);
+        d().setCodeFontConfig(config);
+        window.applyCodeFontConfig?.(config);
+      } catch {
+        // Silently ignore malformed code font config from backend
       }
     };
 
@@ -222,6 +265,9 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         const data = JSON.parse(jsonStr);
         d().setCommitPrompt(data.commitPrompt || '');
         d().setSavingCommitPrompt(false);
+        if (data.projectCommitPrompt !== undefined) {
+          d().setProjectCommitPrompt(data.projectCommitPrompt || '');
+        }
         if (data.saved) {
           d().addToast(t('toast.saveSuccess'), 'success');
         }
@@ -229,6 +275,80 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         console.error('[SettingsView] Failed to parse commit prompt:', error);
         d().setSavingCommitPrompt(false);
         d().addToast(t('toast.saveFailed'), 'error');
+      }
+    };
+
+    window.updatePromptEnhancerConfig = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setPromptEnhancerConfig(data);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse prompt enhancer config:', error);
+      }
+    };
+
+    window.updateCommitAiConfig = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setCommitAiConfig(data);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse commit AI config:', error);
+      }
+    };
+
+    // Project-level commit AI prompt callback
+    window.updateProjectCommitPrompt = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setProjectCommitPrompt(data.projectCommitPrompt || '');
+        d().setSavingProjectCommitPrompt(false);
+        if (data.saved) {
+          d().addToast(t('toast.saveSuccess'), 'success');
+        }
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse project commit prompt:', error);
+        d().setSavingProjectCommitPrompt(false);
+        d().addToast(t('toast.saveFailed'), 'error');
+      }
+    };
+
+    // AI commit generation config callback
+    window.updateCommitGenerationEnabled = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setCommitGenerationEnabled?.(data.commitGenerationEnabled ?? true);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse commit generation config:', error);
+      }
+    };
+
+    // AI session title generation config callback
+    window.updateAiTitleGenerationEnabled = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setAiTitleGenerationEnabled?.(data.aiTitleGenerationEnabled ?? true);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse AI title generation config:', error);
+      }
+    };
+
+    // Status bar widget config callback
+    window.updateStatusBarWidgetEnabled = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setStatusBarWidgetEnabled?.(data.statusBarWidgetEnabled ?? true);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse status bar widget config:', error);
+      }
+    };
+
+    // Task completion notification config callback (opt-in feature, default false)
+    window.updateTaskCompletionNotificationEnabled = (jsonStr: string) => {
+      try {
+        const data = JSON.parse(jsonStr);
+        d().setTaskCompletionNotificationEnabled?.(data.taskCompletionNotificationEnabled ?? false);
+      } catch (error) {
+        console.error('[SettingsView] Failed to parse task completion notification config:', error);
       }
     };
 
@@ -339,8 +459,8 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       }
     };
 
-    // Codex provider callbacks
-    window.updateCodexProviders = (jsonStr: string) => {
+    // Codex provider callbacks - subscribe via the registry.
+    const unsubscribeCodexProviders = subscribeCodexProviderList((jsonStr: string) => {
       try {
         const providersList: CodexProviderConfig[] = JSON.parse(jsonStr);
         d().updateCodexProviders(providersList);
@@ -348,9 +468,9 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         console.error('[SettingsView] Failed to parse Codex providers:', error);
         d().setCodexLoading(false);
       }
-    };
+    });
 
-    window.updateActiveCodexProvider = (jsonStr: string) => {
+    const unsubscribeActiveCodexProvider = subscribeActiveCodexProvider((jsonStr: string) => {
       try {
         const activeProvider: CodexProviderConfig = JSON.parse(jsonStr);
         if (activeProvider) {
@@ -359,7 +479,7 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       } catch (error) {
         console.error('[SettingsView] Failed to parse active Codex provider:', error);
       }
-    };
+    });
 
     window.updateCurrentCodexConfig = (jsonStr: string) => {
       try {
@@ -380,17 +500,28 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
     sendToJava('get_node_path:');
     sendToJava('get_working_directory:');
     sendToJava('get_editor_font_config:');
+    sendToJava('get_ui_font_config:');
+    sendToJava('get_code_font_config:');
     sendToJava('get_streaming_enabled:');
     sendToJava('get_codex_sandbox_mode:');
     sendToJava('get_commit_prompt:');
+    sendToJava('get_commit_ai_config:');
+    sendToJava('get_prompt_enhancer_config:');
     sendToJava('get_sound_notification_config:');
+    sendToJava('get_commit_generation_enabled:');
+    sendToJava('get_ai_title_generation_enabled:');
+    sendToJava('get_status_bar_widget_enabled:');
+    sendToJava('get_task_completion_notification_enabled:');
+    sendToJava('get_permission_dialog_timeout:');
 
     return () => {
       d().cleanupAgentsTimeout();
       d().cleanupPromptsTimeout?.();
 
-      window.updateProviders = undefined;
-      window.updateActiveProvider = undefined;
+      unsubscribeProviders();
+      unsubscribeActiveProvider();
+      unsubscribeCodexProviders();
+      unsubscribeActiveCodexProvider();
       window.showError = undefined;
       window.showSwitchSuccess = undefined;
       window.updateNodePath = undefined;
@@ -398,6 +529,8 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.showSuccess = undefined;
       window.showSuccessI18n = undefined;
       window.onEditorFontConfigReceived = undefined;
+      window.onUiFontConfigReceived = undefined;
+      window.onCodeFontConfigReceived = undefined;
       window.onIdeThemeReceived = previousOnIdeThemeReceived;
       if (!d().onStreamingEnabledChangeProp) {
         window.updateStreamingEnabled = previousUpdateStreamingEnabled;
@@ -407,7 +540,14 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
         window.updateSendShortcut = previousUpdateSendShortcut;
       }
       window.updateCommitPrompt = undefined;
+      window.updateCommitAiConfig = undefined;
+      window.updatePromptEnhancerConfig = undefined;
+      window.updateProjectCommitPrompt = undefined;
       window.updateSoundNotificationConfig = undefined;
+      window.updateCommitGenerationEnabled = undefined;
+      window.updateAiTitleGenerationEnabled = undefined;
+      window.updateStatusBarWidgetEnabled = undefined;
+      window.updateTaskCompletionNotificationEnabled = undefined;
       window.updateAgents = previousUpdateAgents;
       window.agentOperationResult = undefined;
       window.agentImportPreviewResult = undefined;
@@ -416,8 +556,6 @@ export function useSettingsWindowCallbacks(deps: SettingsWindowCallbacksDeps) {
       window.promptOperationResult = undefined;
       window.promptImportPreviewResult = undefined;
       window.promptImportResult = undefined;
-      window.updateCodexProviders = undefined;
-      window.updateActiveCodexProvider = undefined;
       window.updateCurrentCodexConfig = undefined;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,6 +1,5 @@
 package com.github.claudecodegui.session;
 
-import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.permission.PermissionRequest;
 import com.intellij.openapi.project.Project;
@@ -84,5 +83,9 @@ public class SessionCallbackFacade {
 
     public void notifyUsageUpdate(int usedTokens, int maxTokens) {
         callbackHandler.notifyUsageUpdate(usedTokens, maxTokens);
+    }
+
+    public void notifyUserMessageUuidPatched(String content, String uuid) {
+        callbackHandler.notifyUserMessageUuidPatched(content, uuid);
     }
 }

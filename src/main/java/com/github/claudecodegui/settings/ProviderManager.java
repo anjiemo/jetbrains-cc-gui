@@ -27,6 +27,7 @@ import java.util.function.Function;
 public class ProviderManager {
     private static final Logger LOG = Logger.getInstance(ProviderManager.class);
     private static final String BACKUP_FILE_NAME = "config.json.bak";
+    public static final String DISABLED_PROVIDER_ID = "__disabled__";
     public static final String LOCAL_SETTINGS_PROVIDER_ID = "__local_settings_json__";
     public static final String CLI_LOGIN_PROVIDER_ID = "__cli_login__";
 
@@ -511,13 +512,20 @@ public class ProviderManager {
                 com.intellij.ide.util.PropertiesComponent props = com.intellij.ide.util.PropertiesComponent.getInstance();
                 String savedNodePath = props.getValue("claude.code.node.path");
                 if (savedNodePath != null && !savedNodePath.trim().isEmpty()) {
-                    // Validate whether the user-configured path is valid
-                    File nodeFile = new File(savedNodePath.trim());
-                    if (nodeFile.exists() && nodeFile.canExecute()) {
-                        nodePath = savedNodePath.trim();
-                        LOG.info("[ProviderManager] Using user-configured Node.js path: " + nodePath);
+                    String trimmed = savedNodePath.trim();
+                    // WSL paths (Unix-style) cannot be checked with File.exists() on the Windows JVM.
+                    // Validate via NodeDetector.isWslPath() first, then fall back to File checks.
+                    if (NodeDetector.isWslPath(trimmed)) {
+                        nodePath = trimmed;
+                        LOG.info("[ProviderManager] Using user-configured WSL Node.js path: " + nodePath);
                     } else {
-                        LOG.info("[ProviderManager] User-configured Node.js path is invalid, will auto-detect: " + savedNodePath);
+                        File nodeFile = new File(trimmed);
+                        if (nodeFile.exists() && nodeFile.canExecute()) {
+                            nodePath = trimmed;
+                            LOG.info("[ProviderManager] Using user-configured Node.js path: " + nodePath);
+                        } else {
+                            LOG.info("[ProviderManager] User-configured Node.js path is invalid, will auto-detect: " + savedNodePath);
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -531,8 +539,10 @@ public class ProviderManager {
                 LOG.info("[ProviderManager] Auto-detected Node.js path: " + nodePath);
             }
 
-            // Build the Node.js command
-            ProcessBuilder pb = new ProcessBuilder(nodePath, scriptPath, dbPath);
+            // Build the Node.js command (WSL-aware: prepend 'wsl' and convert paths when needed)
+            List<String> command = NodeDetector.buildNodeScriptCommand(nodePath, scriptPath);
+            command.add(NodeDetector.isWslPath(nodePath) ? NodeDetector.convertToWslPath(dbPath) : dbPath);
+            ProcessBuilder pb = new ProcessBuilder(command);
             pb.directory(new File(aiBridgePath));
             pb.redirectErrorStream(true); // Merge stderr into stdout
 
@@ -652,7 +662,9 @@ public class ProviderManager {
     }
 
     /**
-     * Create local provider object with internationalized name and description
+     * Create local provider object with internationalized name and description.
+     * When active, includes settingsConfig from ~/.claude/settings.json so the
+     * webview can sync model mapping (env vars) without an extra round-trip.
      *
      * @param isActive whether this provider is currently active
      * @return JsonObject representing the local provider
@@ -663,6 +675,39 @@ public class ProviderManager {
         localProvider.addProperty("name", ClaudeCodeGuiBundle.message("provider.local.name"));
         localProvider.addProperty("isActive", isActive);
         localProvider.addProperty("isLocalProvider", true);
+
+        // Include ONLY model-mapping env vars from ~/.claude/settings.json so the
+        // webview can display mapped model names. Credentials (ANTHROPIC_AUTH_TOKEN)
+        // are intentionally excluded to comply with Marketplace credential policies.
+        if (isActive) {
+            try {
+                JsonObject claudeSettings = claudeSettingsManager.readClaudeSettings();
+                if (claudeSettings != null && claudeSettings.has("env")) {
+                    JsonObject fullEnv = claudeSettings.getAsJsonObject("env");
+                    JsonObject safeEnv = new JsonObject();
+                    // Only copy model-mapping keys — never credentials
+                    String[] modelMappingKeys = {
+                        "ANTHROPIC_MODEL",
+                        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                        "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+                    };
+                    for (String key : modelMappingKeys) {
+                        if (fullEnv.has(key) && !fullEnv.get(key).isJsonNull()) {
+                            safeEnv.add(key, fullEnv.get(key));
+                        }
+                    }
+                    if (safeEnv.size() > 0) {
+                        JsonObject settingsConfig = new JsonObject();
+                        settingsConfig.add("env", safeEnv);
+                        localProvider.add("settingsConfig", settingsConfig);
+                    }
+                }
+            } catch (Exception e) {
+                LOG.warn("[ProviderManager] Failed to read settings.json for local provider: " + e.getMessage());
+            }
+        }
+
         return localProvider;
     }
 

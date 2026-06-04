@@ -20,7 +20,12 @@ interface Window {
   /**
    * Update messages from backend
    */
-  updateMessages?: (json: string) => void;
+  updateMessages?: (json: string, sequence?: string | number) => void;
+
+  /**
+   * Patch a single message UUID without re-sending the full message list.
+   */
+  patchMessageUuid?: (content: string, uuid: string) => void;
 
   /**
    * Update status message
@@ -36,6 +41,11 @@ interface Window {
    * Show thinking status
    */
   showThinkingStatus?: (value: string | boolean) => void;
+
+  /**
+   * Show conversation summary/compaction notice
+   */
+  showSummary?: (summary: string) => void;
 
   /**
    * Set history data
@@ -58,6 +68,16 @@ interface Window {
   addErrorMessage?: (message: string) => void;
 
   /**
+   * Context usage dialog callback - receives JSON string with context usage data to show in a dialog.
+   */
+  showContextUsageDialog?: (json: string) => void;
+
+  /**
+   * Context usage error callback - shows error toast.
+   */
+  onContextUsageError?: (message: string, requestId?: string) => void;
+
+  /**
    * Add single history message (used for Codex session loading)
    */
   addHistoryMessage?: (message: any) => void;
@@ -67,6 +87,11 @@ interface Window {
    * Triggers Markdown re-rendering to fix incorrect rendering on first history load.
    */
   historyLoadComplete?: () => void;
+
+  /**
+   * Subagent sidechain history callback.
+   */
+  onSubagentHistoryLoaded?: (json: string) => void;
 
   /**
    * Add user message to chat (used for external Quick Fix feature)
@@ -83,6 +108,15 @@ interface Window {
    * Add toast notification (called from backend)
    */
   addToast?: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+
+  /**
+   * Toast deferred until a session transition finishes, because backend
+   * clearMessages resets transient UI state during new-session creation.
+   */
+  __pendingSessionTransitionToast?: {
+    message: string;
+    type?: 'success' | 'error' | 'warning' | 'info';
+  };
 
   /**
    * Usage statistics update callback
@@ -236,9 +270,39 @@ interface Window {
   updateCommitPrompt?: (json: string) => void;
 
   /**
+   * Update project-level commit AI prompt configuration
+   */
+  updateProjectCommitPrompt?: (json: string) => void;
+
+  /**
    * Update sound notification configuration
    */
   updateSoundNotificationConfig?: (json: string) => void;
+
+  /**
+   * Update AI commit generation enabled state
+   */
+  updateCommitGenerationEnabled?: (json: string) => void;
+
+  /**
+   * Update AI session title generation enabled state
+   */
+  updateAiTitleGenerationEnabled?: (json: string) => void;
+
+  /**
+   * Update status bar widget enabled state
+   */
+  updateStatusBarWidgetEnabled?: (json: string) => void;
+
+  /**
+   * Update task completion notification enabled state
+   */
+  updateTaskCompletionNotificationEnabled?: (json: string) => void;
+
+  /**
+   * Update permission dialog timeout setting
+   */
+  updatePermissionDialogTimeout?: (json: string) => void;
 
   /**
    * Update current Claude config
@@ -264,6 +328,16 @@ interface Window {
    * Update working directory configuration
    */
   updateWorkingDirectory?: (json: string) => void;
+
+  /**
+   * Update linkify/navigation capabilities used by Markdown rendering.
+   */
+  updateLinkifyCapabilities?: (json: string) => void;
+
+  /**
+   * File path resolved callback - receives the resolved absolute path for a file link tooltip.
+   */
+  onFilePathResolved?: (json: string) => void;
 
   /**
    * Show success message
@@ -352,19 +426,41 @@ interface Window {
   };
 
   /**
+   * Apply effective plugin UI font configuration (called from Java backend)
+   */
+  applyUiFontConfig?: (config: import('./types/uiFontConfig').UiFontConfig | string) => void;
+
+  /**
+   * Apply effective plugin code font configuration (called from Java backend)
+   */
+  applyCodeFontConfig?: (config: import('./types/uiFontConfig').CodeFontConfig | string) => void;
+
+  /**
+   * Pending effective UI font config before applyUiFontConfig is registered
+   */
+  __pendingUiFontConfig?: import('./types/uiFontConfig').UiFontConfig;
+
+  /**
+   * Pending effective code font config before applyCodeFontConfig is registered
+   */
+  __pendingCodeFontConfig?: import('./types/uiFontConfig').CodeFontConfig;
+
+  /**
    * Apply IDEA language configuration (called from Java backend)
    * @param config Language configuration object containing language code and IDEA locale
    */
   applyIdeaLanguageConfig?: (config: {
     language: string;
+    source?: string;
     ideaLocale?: string;
-  }) => void;
+  } | string) => void;
 
   /**
    * Pending language config before applyIdeaLanguageConfig is registered
    */
   __pendingLanguageConfig?: {
     language: string;
+    source?: string;
     ideaLocale?: string;
   };
 
@@ -374,14 +470,36 @@ interface Window {
   updateEnhancedPrompt?: (result: string) => void;
 
   /**
-   * Update session title (called when session title changes)
+   * Update prompt enhancer settings config from backend
    */
-  updateSessionTitle?: (title: string) => void;
+  updatePromptEnhancerConfig?: (json: string) => void;
+
+  /**
+   * Update commit AI settings config from backend
+   */
+  updateCommitAiConfig?: (json: string) => void;
+
+  /**
+   * Update session title (called when AI generates a title).
+   * @param sessionId - The session ID the title belongs to
+   * @param title - The generated title text
+   */
+  updateSessionTitle?: (sessionId: string, title: string) => void;
 
   /**
    * Editor font config received callback - receives IDEA editor font configuration
    */
   onEditorFontConfigReceived?: (json: string) => void;
+
+  /**
+   * Effective UI font config received callback
+   */
+  onUiFontConfigReceived?: (json: string) => void;
+
+  /**
+   * Effective code font config received callback
+   */
+  onCodeFontConfigReceived?: (json: string) => void;
 
   /**
    * IDE theme received callback - receives IDE theme configuration
@@ -469,6 +587,18 @@ interface Window {
   updateActiveCodexProvider?: (json: string) => void;
 
   /**
+   * Update Node process management snapshot.
+   * Payload: { snapshotAt, totals: { daemon, channel, orphan, all }, processes: NodeProcessInfo[] }
+   */
+  updateNodeProcesses?: (json: string) => void;
+
+  /**
+   * Result of a kill_node_process / kill_all_orphans / restart_node_daemon call.
+   * Payload: { pid?, success?, killed?, restart?, error? }
+   */
+  nodeProcessKillResult?: (json: string) => void;
+
+  /**
    * Update current Codex config (from ~/.codex/)
    */
   updateCurrentCodexConfig?: (json: string) => void;
@@ -480,7 +610,7 @@ interface Window {
   /**
    * Stream start callback - called when streaming begins
    */
-  onStreamStart?: () => void;
+  onStreamStart?: (mode?: string | boolean) => void;
 
   /**
    * Content delta callback - called when a content delta is received
@@ -495,9 +625,22 @@ interface Window {
   onThinkingDelta?: (delta: string) => void;
 
   /**
+   * Block reset callback - called when a new assistant message starts within
+   * an ongoing stream (e.g., after a tool_use loop iteration). Frontend should
+   * clear streaming content refs to prevent cross-turn content merging.
+   */
+  onBlockReset?: () => void;
+
+  /**
    * Stream end callback - called when streaming ends
    */
-  onStreamEnd?: () => void;
+  onStreamEnd?: (sequence?: string | number) => void;
+
+  /**
+   * Streaming heartbeat callback - lightweight signal from backend during
+   * tool execution phases to prevent the stall watchdog from falsely triggering.
+   */
+  onStreamingHeartbeat?: () => void;
 
   /**
    * Permission denied callback - called when permission is denied.
@@ -531,6 +674,61 @@ interface Window {
    * clear both React state AND internal refs before starting a new session.
    */
   __resetTransientUiState?: () => void;
+
+  /**
+   * Timestamp of the last streaming activity (content/thinking delta or message update).
+   * Used by the stream stall watchdog to detect when the backend→frontend bridge is broken.
+   */
+  __lastStreamActivityAt?: number;
+
+  /**
+   * The __turnId of the most recently ended streaming turn.
+   * Used by mergeConsecutiveAssistantMessages to distinguish recently-ended
+   * streaming messages from true history messages and prevent incorrect merging.
+   * Cleared after 5 seconds or when a new turn starts.
+   * @default undefined (no recently ended turn)
+   */
+  __lastStreamEndedTurnId?: number;
+
+  /**
+   * Timestamp when the last streaming turn ended (via onStreamEnd).
+   * Used with __lastStreamEndedTurnId to implement a time-based cleanup.
+   * @default undefined (no stream end recorded)
+   */
+   __lastStreamEndedAt?: number;
+
+   /**
+    * Turn ID for which onStreamEnd has already been processed.
+    * Used as an idempotency guard: when dual-path delivery sends onStreamEnd
+    * twice (primary via flush callback + fallback via Alarm), only the first
+    * arrival takes effect; the second is a no-op.
+    * Cleared in onStreamStart to allow the next turn.
+    * @default undefined (no processed turn)
+    */
+   __streamEndProcessedTurnId?: number;
+
+   /**
+   * Timestamp when the current streaming turn started.
+   * Used to calculate durationMs on the assistant message when the stream ends.
+   */
+  __turnStartedAt?: number;
+
+  /**
+   * Interval handle for the stream stall watchdog.
+   * Stored on window so re-registration of streaming callbacks clears the previous interval.
+   */
+  __stallWatchdogInterval?: ReturnType<typeof setInterval> | null;
+
+  /**
+   * Pending rAF handle and JSON for deferred updateMessages processing.
+   * Stored on window so re-registration of message callbacks cancels stale rAFs.
+   */
+  __pendingUpdateRaf?: number | null;
+  __pendingUpdateJson?: string | null;
+  __pendingUpdateSequence?: number | null;
+  __minAcceptedUpdateSequence?: number;
+  /** Cancel pending rAF-deferred updateMessages (set by messageCallbacks, called by onStreamEnd). */
+  __cancelPendingUpdateMessages?: () => void;
 
   /**
    * Rewind result callback - returns the result of a rewind operation
@@ -603,6 +801,16 @@ interface Window {
   dependencyUpdateAvailable?: (json: string) => void;
 
   /**
+   * Dependency versions loaded callback
+   */
+  dependencyVersionsLoaded?: (json: string) => void;
+
+  /**
+   * Pending dependency versions payload before settings initialization
+   */
+  __pendingDependencyVersions?: string;
+
+  /**
    * Pending dependency updates payload before settings initialization
    */
   __pendingDependencyUpdates?: string;
@@ -627,11 +835,31 @@ interface Window {
    */
   __pendingAutoOpenFileEnabled?: string;
 
+  /**
+   * Pending permission dialog timeout before React initialization
+   */
+  __pendingPermissionDialogTimeout?: string;
+
   __pendingPermissionDialogRequests?: string[];
 
   __pendingAskUserQuestionDialogRequests?: string[];
 
   __pendingPlanApprovalDialogRequests?: string[];
+
+  /**
+   * Pending updateMessages payload before React initialization
+   */
+  __pendingUpdateMessages?: string | { json: string; sequence?: number | null };
+
+  /**
+   * Pending status text before React initialization
+   */
+  __pendingStatusText?: string;
+
+  /**
+   * Pending summary text before React initialization
+   */
+  __pendingSummaryText?: string;
 
   /**
    * Pending user message before addUserMessage is registered (for Quick Fix feature)
@@ -644,6 +872,11 @@ interface Window {
   __pendingLoadingState?: boolean;
 
   /**
+   * Pending mode payload before setMode is registered.
+   */
+  __pendingModeReceived?: string;
+
+  /**
    * Execute context action from IDEA shortcut (copy/cut/send)
    */
   execContextAction?: (action: string) => void;
@@ -652,4 +885,37 @@ interface Window {
    * Clipboard read callback for paste from IDEA shortcut
    */
   onClipboardRead?: (text: string) => void;
+
+  // ============================================================================
+  // Theme initialization (Java pre-injects before React boots)
+  // ============================================================================
+
+  /**
+   * Initial IDE theme injected by Java into the HTML before React boots.
+   * Used by useThemeInit to avoid a flash of incorrect theme.
+   */
+  __INITIAL_IDE_THEME__?: 'light' | 'dark';
+
+  // ============================================================================
+  // Provider settings panel callbacks (registered by ProviderList)
+  // ============================================================================
+
+  /**
+   * CLI login account info callback. Java pushes the logged-in account email
+   * after a successful CLI login to update the settings panel.
+   */
+  updateCliLoginAccountInfo?: (email: string) => void;
+
+  /**
+   * Provider import preview result callback. Java pushes a JSON string or
+   * parsed payload describing the providers detected during import preview.
+   */
+  import_preview_result?: (dataOrStr: string | { providers?: unknown }) => void;
+
+  /**
+   * Backend notification callback (variadic for backward compatibility).
+   * Modern callers pass (type, title, message); legacy callers pass a single
+   * JSON string or object with shape { type, title, message }.
+   */
+  backend_notification?: (...args: unknown[]) => void;
 }

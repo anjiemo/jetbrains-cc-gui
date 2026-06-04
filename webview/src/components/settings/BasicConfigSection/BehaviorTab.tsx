@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import styles from './style.module.less';
 import { useTranslation } from 'react-i18next';
+import { DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS } from '../../../utils/permissionDialogTimeout';
+import { PermissionDialogTimeoutSetting } from './PermissionDialogTimeoutSetting';
 
 /** Upward-opening custom select for sound selection (avoids JCEF clipping) */
 const SoundSelectUpward = ({
@@ -81,6 +83,20 @@ export interface BehaviorTabProps {
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
   diffExpandedByDefault?: boolean;
   onDiffExpandedByDefaultChange?: (enabled: boolean) => void;
+  commitGenerationEnabled?: boolean;
+  onCommitGenerationEnabledChange?: (enabled: boolean) => void;
+  statusBarWidgetEnabled?: boolean;
+  onStatusBarWidgetEnabledChange?: (enabled: boolean) => void;
+  aiTitleGenerationEnabled?: boolean;
+  onAiTitleGenerationEnabledChange?: (enabled: boolean) => void;
+  /**
+   * Whether the "create new session with existing messages" confirm dialog is
+   * enabled (i.e. shown). Positive semantics: `true` = dialog shows, `false` =
+   * silently create the new session. Default `true` to preserve safer behaviour
+   * for upgrading users.
+   */
+  newSessionConfirmEnabled?: boolean;
+  onNewSessionConfirmEnabledChange?: (enabled: boolean) => void;
   soundNotificationEnabled?: boolean;
   onSoundNotificationEnabledChange?: (enabled: boolean) => void;
   soundOnlyWhenUnfocused?: boolean;
@@ -92,6 +108,10 @@ export interface BehaviorTabProps {
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
   onBrowseSound?: () => void;
+  taskCompletionNotificationEnabled?: boolean;
+  onTaskCompletionNotificationEnabledChange?: (enabled: boolean) => void;
+  permissionDialogTimeoutSeconds?: number;
+  onPermissionDialogTimeoutChange?: (seconds: number) => void;
 }
 
 const BehaviorTab = ({
@@ -103,6 +123,14 @@ const BehaviorTab = ({
   onAutoOpenFileEnabledChange = () => {},
   diffExpandedByDefault = false,
   onDiffExpandedByDefaultChange = () => {},
+  commitGenerationEnabled = true,
+  onCommitGenerationEnabledChange = () => {},
+  statusBarWidgetEnabled = true,
+  onStatusBarWidgetEnabledChange = () => {},
+  aiTitleGenerationEnabled = true,
+  onAiTitleGenerationEnabledChange = () => {},
+  newSessionConfirmEnabled = true,
+  onNewSessionConfirmEnabledChange = () => {},
   soundNotificationEnabled = false,
   onSoundNotificationEnabledChange = () => {},
   soundOnlyWhenUnfocused = false,
@@ -114,6 +142,10 @@ const BehaviorTab = ({
   onSaveCustomSoundPath = () => {},
   onTestSound = () => {},
   onBrowseSound = () => {},
+  taskCompletionNotificationEnabled = false,
+  onTaskCompletionNotificationEnabledChange = () => {},
+  permissionDialogTimeoutSeconds = DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS,
+  onPermissionDialogTimeoutChange = () => {},
 }: BehaviorTabProps) => {
   const { t } = useTranslation();
 
@@ -162,6 +194,11 @@ const BehaviorTab = ({
           </div>
         </div>
       </div>
+
+      <PermissionDialogTimeoutSetting
+        permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
+        onPermissionDialogTimeoutChange={onPermissionDialogTimeoutChange}
+      />
 
       {/* Streaming configuration */}
       <div className={styles.streamingSection}>
@@ -238,6 +275,138 @@ const BehaviorTab = ({
         <small className={styles.formHint}>
           <span className="codicon codicon-info" />
           <span>{t('settings.basic.diffExpanded.hint')}</span>
+        </small>
+      </div>
+
+      {/* AI commit generation toggle */}
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-git-commit" />
+          <span className={styles.fieldLabel}>{t('settings.basic.commitGeneration.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={commitGenerationEnabled}
+            onChange={(e) => onCommitGenerationEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {commitGenerationEnabled
+              ? t('settings.basic.commitGeneration.enabled')
+              : t('settings.basic.commitGeneration.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.basic.commitGeneration.hint')}</span>
+        </small>
+      </div>
+
+      {/* Status bar widget toggle */}
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-layout-statusbar" />
+          <span className={styles.fieldLabel}>{t('settings.basic.statusBarWidget.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={statusBarWidgetEnabled}
+            onChange={(e) => onStatusBarWidgetEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {statusBarWidgetEnabled
+              ? t('settings.basic.statusBarWidget.enabled')
+              : t('settings.basic.statusBarWidget.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.basic.statusBarWidget.hint')}</span>
+        </small>
+      </div>
+
+      {/* Task completion notification toggle */}
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-bell" />
+          <span className={styles.fieldLabel}>{t('settings.basic.taskCompletionNotification.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={taskCompletionNotificationEnabled}
+            onChange={(e) => onTaskCompletionNotificationEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {taskCompletionNotificationEnabled
+              ? t('settings.basic.taskCompletionNotification.enabled')
+              : t('settings.basic.taskCompletionNotification.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.basic.taskCompletionNotification.hint')}</span>
+        </small>
+      </div>
+
+      {/* AI session title generation toggle */}
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-sparkle" />
+          <span className={styles.fieldLabel}>{t('settings.other.aiTitleGeneration.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={aiTitleGenerationEnabled}
+            onChange={(e) => onAiTitleGenerationEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {aiTitleGenerationEnabled
+              ? t('settings.other.aiTitleGeneration.enabled')
+              : t('settings.other.aiTitleGeneration.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.other.aiTitleGeneration.hint')}</span>
+        </small>
+      </div>
+
+      {/* New-session confirm dialog toggle.
+          Positive semantics throughout (no inversions in JSX) — the storage
+          layer in utils/skipNewSessionConfirm.ts owns the negation. */}
+      <div className={styles.streamingSection}>
+        <div className={styles.fieldHeader}>
+          <span className="codicon codicon-comment-discussion" />
+          <span className={styles.fieldLabel}>{t('settings.basic.newSessionConfirm.label')}</span>
+        </div>
+        <label className={styles.toggleWrapper}>
+          <input
+            type="checkbox"
+            className={styles.toggleInput}
+            checked={newSessionConfirmEnabled}
+            onChange={(e) => onNewSessionConfirmEnabledChange(e.target.checked)}
+          />
+          <span className={styles.toggleSlider} />
+          <span className={styles.toggleLabel}>
+            {newSessionConfirmEnabled
+              ? t('settings.basic.newSessionConfirm.enabled')
+              : t('settings.basic.newSessionConfirm.disabled')}
+          </span>
+        </label>
+        <small className={styles.formHint}>
+          <span className="codicon codicon-info" />
+          <span>{t('settings.basic.newSessionConfirm.hint')}</span>
         </small>
       </div>
 

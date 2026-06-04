@@ -5,6 +5,35 @@
 // ============ Constants ============
 
 /**
+ * Special pseudo provider IDs (not stored in config.json providers list)
+ * These represent special operational modes, not actual provider configurations.
+ */
+export const SPECIAL_PROVIDER_IDS = {
+  /** Disabled state - no active provider */
+  DISABLED: '__disabled__',
+  /** Local ~/.claude/settings.json mode */
+  LOCAL_SETTINGS: '__local_settings_json__',
+  /** CLI login authentication mode */
+  CLI_LOGIN: '__cli_login__',
+  /** Codex CLI login authentication mode */
+  CODEX_CLI_LOGIN: '__codex_cli_login__',
+} as const;
+
+/**
+ * Check if a provider ID is a special pseudo provider
+ * @param id - Provider ID to check
+ * @returns Whether this is a special pseudo provider that cannot be updated via update_provider
+ */
+export function isSpecialProviderId(id: string): boolean {
+  return (
+    id === SPECIAL_PROVIDER_IDS.DISABLED ||
+    id === SPECIAL_PROVIDER_IDS.LOCAL_SETTINGS ||
+    id === SPECIAL_PROVIDER_IDS.CLI_LOGIN ||
+    id === SPECIAL_PROVIDER_IDS.CODEX_CLI_LOGIN
+  );
+}
+
+/**
  * localStorage keys for provider-related data
  */
 export const STORAGE_KEYS = {
@@ -144,6 +173,112 @@ export interface CodexCustomModel {
 }
 
 /**
+ * Single environment variable entry
+ */
+export interface EnvVarEntry {
+  /** Environment variable name */
+  key: string;
+  /** Environment variable value */
+  value: string;
+}
+
+/**
+ * Codex protected environment variable names that cannot be overridden by custom env vars.
+ */
+export const CODEX_PROTECTED_ENV_KEYS: ReadonlySet<string> = new Set([
+  'CODEX_USE_STDIN',
+  'CODEX_MODEL',
+  'CODEX_SANDBOX_MODE',
+  'CODEX_SANDBOX',
+  'CODEX_APPROVAL_POLICY',
+  'CODEX_CI',
+  'CODEX_SANDBOX_NETWORK_DISABLED',
+  'CODEX_HOME',
+  'CLAUDE_SESSION_ID',
+  'CLAUDE_PERMISSION_DIR',
+  'HOME',
+  'PATH',
+  'TMPDIR',
+  'TEMP',
+  'TMP',
+  'IDEA_PROJECT_PATH',
+  'PROJECT_PATH',
+  'CLAUDE_USE_STDIN',
+]);
+
+/**
+ * Maximum length for env var values. Long values risk exceeding the OS
+ * ARG_MAX limit when the child process is spawned.
+ * Must stay in sync with MAX_ENV_VAR_VALUE_LENGTH in CodexSDKBridge.java.
+ */
+export const ENV_VAR_VALUE_MAX_LENGTH = 16 * 1024;
+
+/**
+ * Validate whether an env var key name is valid.
+ * Must start with letter or underscore, followed by letters, digits, or underscores.
+ */
+export function isValidEnvVarKey(key: string): boolean {
+  if (!key || typeof key !== 'string') return false;
+  return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key);
+}
+
+/**
+ * Check if an env var key is a protected Codex built-in variable.
+ *
+ * NOTE: comparison is case-insensitive (key is uppercased before lookup).
+ * On Linux/macOS env vars are case-sensitive, but we conservatively reject
+ * any case-variant of a protected name to keep behavior consistent across
+ * platforms (Windows env vars are case-insensitive).
+ */
+export function isProtectedEnvVarKey(key: string): boolean {
+  return CODEX_PROTECTED_ENV_KEYS.has(key.toUpperCase());
+}
+
+export interface EnvVarValidationIssue {
+  index: number;
+  field: 'key' | 'value';
+  reason: 'invalid' | 'protected' | 'duplicate' | 'value_too_long';
+  key?: string;
+}
+
+/**
+ * Validate a list of EnvVarEntry. Returns the first issue per row, if any.
+ * Empty keys are skipped (will be filtered before saving).
+ */
+export function validateEnvVarEntries(entries: EnvVarEntry[]): EnvVarValidationIssue[] {
+  const issues: EnvVarValidationIssue[] = [];
+  const seenKeys = new Set<string>();
+
+  entries.forEach((entry, index) => {
+    if (entry.value.length > ENV_VAR_VALUE_MAX_LENGTH) {
+      issues.push({ index, field: 'value', reason: 'value_too_long' });
+    }
+
+    const key = entry.key.trim();
+    if (!key) return;
+
+    if (!isValidEnvVarKey(key)) {
+      issues.push({ index, field: 'key', reason: 'invalid', key });
+      return;
+    }
+
+    if (isProtectedEnvVarKey(key)) {
+      issues.push({ index, field: 'key', reason: 'protected', key });
+      return;
+    }
+
+    const upperKey = key.toUpperCase();
+    if (seenKeys.has(upperKey)) {
+      issues.push({ index, field: 'key', reason: 'duplicate', key });
+      return;
+    }
+    seenKeys.add(upperKey);
+  });
+
+  return issues;
+}
+
+/**
  * Codex provider configuration
  */
 export interface CodexProviderConfig {
@@ -163,6 +298,10 @@ export interface CodexProviderConfig {
   authJson?: string;
   /** Custom model list */
   customModels?: CodexCustomModel[];
+  /** Environment variables for sendMessage subprocess */
+  messageEnvVars?: EnvVarEntry[];
+  /** Environment variables for getMcpServerTools subprocess */
+  mcpEnvVars?: EnvVarEntry[];
 }
 
 // ============ Provider Presets ============
@@ -219,9 +358,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     env: {
       ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
       ANTHROPIC_AUTH_TOKEN: '',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'DeepSeek-V3.2',
-      ANTHROPIC_DEFAULT_SONNET_MODEL: 'DeepSeek-V3.2',
-      ANTHROPIC_DEFAULT_OPUS_MODEL: 'DeepSeek-V3.2',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek-v4-pro[1m]',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'deepseek-v4-pro[1m]',
+      CLAUDE_CODE_EFFORT_LEVEL: 'max',
     },
   },
   {
@@ -244,9 +384,20 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     env: {
       ANTHROPIC_BASE_URL: 'https://api.xiaomimimo.com/anthropic',
       ANTHROPIC_AUTH_TOKEN: '',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2-flash',
-      ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2-flash',
-      ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2-flash',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.5-pro',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.5-pro',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.5-pro',
+    },
+  },
+  {
+    id: 'xiaomi-plan',
+    nameKey: 'settings.provider.presets.xiaomiPlan',
+    env: {
+      ANTHROPIC_BASE_URL: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+      ANTHROPIC_AUTH_TOKEN: '',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'mimo-v2.5-pro',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.5-pro',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'mimo-v2.5-pro',
     },
   },
   {

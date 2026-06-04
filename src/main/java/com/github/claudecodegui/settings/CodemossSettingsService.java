@@ -1,11 +1,14 @@
 package com.github.claudecodegui.settings;
 
+import com.github.claudecodegui.util.FontConfigService;
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.model.ConflictStrategy;
 import com.github.claudecodegui.model.DeleteResult;
 import com.github.claudecodegui.model.PromptScope;
+import com.github.claudecodegui.dependency.DependencyManager;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.intellij.openapi.diagnostic.Logger;
@@ -22,6 +25,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Codemoss configuration service (Facade pattern).
@@ -33,6 +37,37 @@ public class CodemossSettingsService {
     private static final int CONFIG_VERSION = 2;
     private static final String CODEX_SANDBOX_MODE_WORKSPACE_WRITE = "workspace-write";
     private static final String CODEX_SANDBOX_MODE_DANGER_FULL_ACCESS = "danger-full-access";
+    private static final String UI_FONT_CONFIG_KEY = "uiFont";
+    private static final String CODE_FONT_CONFIG_KEY = "codeFont";
+    // Shared by both UI font and code font: the persisted JSON keys ("mode" /
+    // "customFontPath") and the set of valid modes are identical for the two font kinds,
+    // so they reuse these UI_FONT_*-named constants. They are NOT UI-only despite the name.
+    private static final String UI_FONT_MODE_KEY = "mode";
+    private static final String UI_FONT_CUSTOM_PATH_KEY = "customFontPath";
+    private static final Set<String> VALID_UI_FONT_MODES = Set.of(
+            FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR,
+            FontConfigService.UI_FONT_MODE_CUSTOM_FILE
+    );
+    public static final String CODEX_RUNTIME_ACCESS_INACTIVE = "inactive";
+    public static final String CODEX_RUNTIME_ACCESS_MANAGED = "managed";
+    public static final String CODEX_RUNTIME_ACCESS_CLI_LOGIN = "cli_login";
+    private static final String COMMIT_AI_KEY = "commitAi";
+    private static final String PROMPT_ENHANCER_KEY = "promptEnhancer";
+    private static final String AI_FEATURE_PROVIDER_KEY = "provider";
+    private static final String AI_FEATURE_MODELS_KEY = "models";
+    private static final String AI_FEATURE_EFFECTIVE_PROVIDER_KEY = "effectiveProvider";
+    private static final String AI_FEATURE_RESOLUTION_SOURCE_KEY = "resolutionSource";
+    private static final String AI_FEATURE_AVAILABILITY_KEY = "availability";
+    private static final String AI_FEATURE_PROVIDER_CLAUDE = "claude";
+    private static final String AI_FEATURE_PROVIDER_CODEX = "codex";
+    private static final String AI_FEATURE_RESOLUTION_MANUAL = "manual";
+    private static final String AI_FEATURE_RESOLUTION_AUTO = "auto";
+    private static final String AI_FEATURE_RESOLUTION_UNAVAILABLE = "unavailable";
+    private static final String DEFAULT_PROMPT_ENHANCER_CLAUDE_MODEL = "claude-sonnet-4-6";
+    private static final String DEFAULT_PROMPT_ENHANCER_CODEX_MODEL = "gpt-5.5";
+    private static final String DEFAULT_COMMIT_AI_CLAUDE_MODEL = "claude-sonnet-4-6";
+    private static final String DEFAULT_COMMIT_AI_CODEX_MODEL = "gpt-5.5";
+    private static final String USER_LANGUAGE_CONFIG_KEY = "language";
 
     private final Gson gson;
 
@@ -242,7 +277,51 @@ public class CodemossSettingsService {
         claude.add("providers", providers);
         config.add("claude", claude);
 
+        JsonObject codex = new JsonObject();
+        codex.addProperty("current", "");
+        codex.add("providers", new JsonObject());
+        codex.addProperty("localConfigAuthorized", false);
+        config.add("codex", codex);
+
         return config;
+    }
+
+    // ==================== Language Config Management ====================
+
+    /**
+     * Get the manually configured UI language.
+     *
+     * @return configured language code, or null when the UI should follow the IDE language
+     */
+    public String getUserLanguage() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has(USER_LANGUAGE_CONFIG_KEY) || config.get(USER_LANGUAGE_CONFIG_KEY).isJsonNull()) {
+            return null;
+        }
+        String language = config.get(USER_LANGUAGE_CONFIG_KEY).getAsString();
+        return language == null || language.trim().isEmpty() ? null : language.trim();
+    }
+
+    /**
+     * Persist the manually configured UI language.
+     *
+     * @param language supported UI language code
+     */
+    public void setUserLanguage(String language) throws IOException {
+        JsonObject config = readConfig();
+        config.addProperty(USER_LANGUAGE_CONFIG_KEY, language);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set user language: " + language);
+    }
+
+    /**
+     * Clear the manual UI language override so the webview follows the IDE language.
+     */
+    public void clearUserLanguage() throws IOException {
+        JsonObject config = readConfig();
+        config.remove(USER_LANGUAGE_CONFIG_KEY);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Cleared user language override");
     }
 
     // ==================== Claude Settings Management ====================
@@ -359,6 +438,128 @@ public class CodemossSettingsService {
         LOG.info("[CodemossSettings] Set commit prompt: " + prompt);
     }
 
+    /**
+     * Get project-level commit AI prompt.
+     *
+     * @param projectPath project path
+     * @return project commit prompt, empty string if not configured
+     */
+    public String getProjectCommitPrompt(String projectPath) throws IOException {
+        if (projectPath == null) {
+            return "";
+        }
+        JsonObject config = readConfig();
+        if (config.has("projectCommitPrompt")) {
+            JsonObject projectPrompts = config.getAsJsonObject("projectCommitPrompt");
+            if (projectPrompts.has(projectPath)) {
+                return projectPrompts.get(projectPath).getAsString();
+            }
+        }
+        return "";
+    }
+
+    /**
+     * Set project-level commit AI prompt.
+     *
+     * @param projectPath project path
+     * @param prompt commit prompt
+     */
+    public void setProjectCommitPrompt(String projectPath, String prompt) throws IOException {
+        if (projectPath == null) {
+            return;
+        }
+        JsonObject config = readConfig();
+        JsonObject projectPrompts;
+        if (config.has("projectCommitPrompt")) {
+            projectPrompts = config.getAsJsonObject("projectCommitPrompt");
+        } else {
+            projectPrompts = new JsonObject();
+            config.add("projectCommitPrompt", projectPrompts);
+        }
+        projectPrompts.addProperty(projectPath, prompt);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set project commit prompt for project: " + projectPath);
+    }
+
+    // ==================== UI Font Config Management ====================
+
+    /**
+     * Get persisted UI font configuration.
+     *
+     * @return normalized UI font configuration
+     */
+    public JsonObject getUiFontConfig() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has(UI_FONT_CONFIG_KEY) || !config.get(UI_FONT_CONFIG_KEY).isJsonObject()) {
+            return createDefaultUiFontConfig();
+        }
+        return normalizeUiFontConfig(config.getAsJsonObject(UI_FONT_CONFIG_KEY));
+    }
+
+    /**
+     * Persist UI font configuration.
+     *
+     * @param mode requested mode
+     * @param customFontPath custom font path for custom file mode
+     */
+    public void setUiFontConfig(String mode, String customFontPath) throws IOException {
+        JsonObject config = readConfig();
+        config.add(UI_FONT_CONFIG_KEY, createUiFontConfig(mode, customFontPath));
+        writeConfig(config);
+        LOG.debug("[CodemossSettings] Set UI font config: mode=" + mode
+                + ", customFontPath=" + customFontPath);
+    }
+
+    /**
+     * Get persisted code font configuration.
+     *
+     * @return normalized code font configuration
+     */
+    public JsonObject getCodeFontConfig() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has(CODE_FONT_CONFIG_KEY) || !config.get(CODE_FONT_CONFIG_KEY).isJsonObject()) {
+            return createDefaultCodeFontConfig();
+        }
+        return normalizeCodeFontConfig(config.getAsJsonObject(CODE_FONT_CONFIG_KEY));
+    }
+
+    /**
+     * Persist code font configuration.
+     *
+     * @param mode requested mode
+     * @param customFontPath custom font path for custom file mode
+     */
+    public void setCodeFontConfig(String mode, String customFontPath) throws IOException {
+        JsonObject config = readConfig();
+        config.add(CODE_FONT_CONFIG_KEY, createCodeFontConfig(mode, customFontPath));
+        writeConfig(config);
+        LOG.debug("[CodemossSettings] Set code font config: mode=" + mode
+                + ", customFontPath=" + customFontPath);
+    }
+
+    // ==================== Permission Dialog Timeout Config Management ====================
+
+    public static final int DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS =
+            PermissionDialogTimeoutSettings.DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS;
+    public static final int MIN_PERMISSION_DIALOG_TIMEOUT_SECONDS =
+            PermissionDialogTimeoutSettings.MIN_PERMISSION_DIALOG_TIMEOUT_SECONDS;
+    public static final int MAX_PERMISSION_DIALOG_TIMEOUT_SECONDS =
+            PermissionDialogTimeoutSettings.MAX_PERMISSION_DIALOG_TIMEOUT_SECONDS;
+    public static final long PERMISSION_SAFETY_NET_BUFFER_SECONDS =
+            PermissionDialogTimeoutSettings.PERMISSION_SAFETY_NET_BUFFER_SECONDS;
+
+    public static int clampPermissionDialogTimeoutSeconds(int seconds) {
+        return PermissionDialogTimeoutSettings.clampPermissionDialogTimeoutSeconds(seconds);
+    }
+
+    public int getPermissionDialogTimeoutSeconds() throws IOException {
+        return PermissionDialogTimeoutSettings.getPermissionDialogTimeoutSeconds(this);
+    }
+
+    public void setPermissionDialogTimeoutSeconds(int seconds) throws IOException {
+        PermissionDialogTimeoutSettings.setPermissionDialogTimeoutSeconds(this, seconds);
+    }
+
     // ==================== Streaming Config Management ====================
 
     /**
@@ -388,6 +589,77 @@ public class CodemossSettingsService {
         }
 
         return true;
+    }
+
+    private JsonObject createDefaultUiFontConfig() {
+        JsonObject uiFont = new JsonObject();
+        uiFont.addProperty(UI_FONT_MODE_KEY, FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR);
+        return uiFont;
+    }
+
+    private JsonObject createDefaultCodeFontConfig() {
+        JsonObject codeFont = new JsonObject();
+        codeFont.addProperty(UI_FONT_MODE_KEY, FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR);
+        return codeFont;
+    }
+
+    private JsonObject normalizeUiFontConfig(JsonObject rawConfig) {
+        if (rawConfig == null) {
+            return createDefaultUiFontConfig();
+        }
+        String requestedMode = rawConfig.has(UI_FONT_MODE_KEY) && !rawConfig.get(UI_FONT_MODE_KEY).isJsonNull()
+                ? rawConfig.get(UI_FONT_MODE_KEY).getAsString()
+                : FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR;
+        String customFontPath = rawConfig.has(UI_FONT_CUSTOM_PATH_KEY) && !rawConfig.get(UI_FONT_CUSTOM_PATH_KEY).isJsonNull()
+                ? rawConfig.get(UI_FONT_CUSTOM_PATH_KEY).getAsString()
+                : null;
+        return createUiFontConfig(requestedMode, customFontPath);
+    }
+
+    private JsonObject createUiFontConfig(String mode, String customFontPath) {
+        String normalizedMode = VALID_UI_FONT_MODES.contains(mode)
+                ? mode
+                : FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR;
+        JsonObject uiFont = new JsonObject();
+        uiFont.addProperty(UI_FONT_MODE_KEY, normalizedMode);
+
+        if (FontConfigService.UI_FONT_MODE_CUSTOM_FILE.equals(normalizedMode)
+                && customFontPath != null
+                && !customFontPath.trim().isEmpty()) {
+            uiFont.addProperty(UI_FONT_CUSTOM_PATH_KEY, customFontPath.trim());
+        }
+
+        return uiFont;
+    }
+
+    private JsonObject normalizeCodeFontConfig(JsonObject rawConfig) {
+        if (rawConfig == null) {
+            return createDefaultCodeFontConfig();
+        }
+        String requestedMode = rawConfig.has(UI_FONT_MODE_KEY) && !rawConfig.get(UI_FONT_MODE_KEY).isJsonNull()
+                ? rawConfig.get(UI_FONT_MODE_KEY).getAsString()
+                : FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR;
+        String customFontPath = rawConfig.has(UI_FONT_CUSTOM_PATH_KEY) && !rawConfig.get(UI_FONT_CUSTOM_PATH_KEY).isJsonNull()
+                ? rawConfig.get(UI_FONT_CUSTOM_PATH_KEY).getAsString()
+                : null;
+        return createCodeFontConfig(requestedMode, customFontPath);
+    }
+
+    private JsonObject createCodeFontConfig(String mode, String customFontPath) {
+        // UI font and code font share the same valid-mode set (see VALID_UI_FONT_MODES).
+        String normalizedMode = VALID_UI_FONT_MODES.contains(mode)
+                ? mode
+                : FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR;
+        JsonObject codeFont = new JsonObject();
+        codeFont.addProperty(UI_FONT_MODE_KEY, normalizedMode);
+
+        if (FontConfigService.UI_FONT_MODE_CUSTOM_FILE.equals(normalizedMode)
+                && customFontPath != null
+                && !customFontPath.trim().isEmpty()) {
+            codeFont.addProperty(UI_FONT_CUSTOM_PATH_KEY, customFontPath.trim());
+        }
+
+        return codeFont;
     }
 
     /**
@@ -1033,6 +1305,365 @@ public class CodemossSettingsService {
         LOG.info("[CodemossSettings] Set selected sound: " + soundId);
     }
 
+    // ==================== Task Completion Notification Management ====================
+
+    /**
+     * Get whether task completion balloon notification is enabled.
+     *
+     * @return whether task completion notification is enabled, default is false (opt-in)
+     */
+    public boolean getTaskCompletionNotificationEnabled() throws IOException {
+        JsonObject config = readConfig();
+
+        if (config.has("taskCompletionNotificationEnabled") && !config.get("taskCompletionNotificationEnabled").isJsonNull()) {
+            return config.get("taskCompletionNotificationEnabled").getAsBoolean();
+        }
+
+        return false;
+    }
+
+    /**
+     * Set whether task completion balloon notification is enabled.
+     *
+     * @param enabled whether to enable
+     */
+    public void setTaskCompletionNotificationEnabled(boolean enabled) throws IOException {
+        JsonObject config = readConfig();
+        config.addProperty("taskCompletionNotificationEnabled", enabled);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set task completion notification enabled: " + enabled);
+    }
+
+    // ==================== AI Feature Toggle Management ====================
+
+    /**
+     * Get whether AI commit message generation is enabled.
+     *
+     * @return whether commit generation is enabled, default is true
+     */
+    public boolean getCommitGenerationEnabled() throws IOException {
+        JsonObject config = readConfig();
+
+        if (config.has("commitGenerationEnabled") && !config.get("commitGenerationEnabled").isJsonNull()) {
+            return config.get("commitGenerationEnabled").getAsBoolean();
+        }
+
+        return true;
+    }
+
+    /**
+     * Set whether AI commit message generation is enabled.
+     *
+     * @param enabled whether to enable
+     */
+    public void setCommitGenerationEnabled(boolean enabled) throws IOException {
+        JsonObject config = readConfig();
+        config.addProperty("commitGenerationEnabled", enabled);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set commit generation enabled: " + enabled);
+    }
+
+    /**
+     * Get whether status bar widget is enabled.
+     *
+     * @return whether status bar widget is enabled, default is true
+     */
+    public boolean getStatusBarWidgetEnabled() throws IOException {
+        JsonObject config = readConfig();
+
+        if (config.has("statusBarWidgetEnabled") && !config.get("statusBarWidgetEnabled").isJsonNull()) {
+            return config.get("statusBarWidgetEnabled").getAsBoolean();
+        }
+
+        return true;
+    }
+
+    /**
+     * Set whether status bar widget is enabled.
+     *
+     * @param enabled whether to enable
+     */
+    public void setStatusBarWidgetEnabled(boolean enabled) throws IOException {
+        JsonObject config = readConfig();
+        config.addProperty("statusBarWidgetEnabled", enabled);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set status bar widget enabled: " + enabled);
+    }
+
+    /**
+     * Get whether AI session title generation is enabled.
+     *
+     * @return whether AI title generation is enabled, default is true
+     */
+    public boolean getAiTitleGenerationEnabled() throws IOException {
+        JsonObject config = readConfig();
+
+        if (config.has("aiTitleGenerationEnabled") && !config.get("aiTitleGenerationEnabled").isJsonNull()) {
+            return config.get("aiTitleGenerationEnabled").getAsBoolean();
+        }
+
+        return true;
+    }
+
+    /**
+     * Set whether AI session title generation is enabled.
+     *
+     * @param enabled whether to enable
+     */
+    public void setAiTitleGenerationEnabled(boolean enabled) throws IOException {
+        JsonObject config = readConfig();
+        config.addProperty("aiTitleGenerationEnabled", enabled);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set AI title generation enabled: " + enabled);
+    }
+
+    // ==================== Prompt Enhancer Config Management ====================
+
+    /**
+     * Get prompt enhancer configuration with resolved provider availability.
+     *
+     * <p>The returned object always includes:
+     * <ul>
+     *     <li>provider: manual override or null</li>
+     *     <li>models: per-provider remembered models</li>
+     *     <li>effectiveProvider: resolved runtime provider or null</li>
+     *     <li>resolutionSource: manual/auto/unavailable</li>
+     *     <li>availability: per-provider availability flags</li>
+     * </ul>
+     */
+    public JsonObject getPromptEnhancerConfig() throws IOException {
+        return getAiFeatureConfig(
+                PROMPT_ENHANCER_KEY,
+                DEFAULT_PROMPT_ENHANCER_CLAUDE_MODEL,
+                DEFAULT_PROMPT_ENHANCER_CODEX_MODEL
+        );
+    }
+
+    /**
+     * Persist prompt enhancer provider override and per-provider models.
+     *
+     * @param provider manual provider override, null/blank to restore auto mode
+     * @param claudeModel remembered Claude enhancer model
+     * @param codexModel remembered Codex enhancer model
+     */
+    public void setPromptEnhancerConfig(String provider, String claudeModel, String codexModel) throws IOException {
+        setAiFeatureConfig(
+                PROMPT_ENHANCER_KEY,
+                provider,
+                claudeModel,
+                codexModel,
+                DEFAULT_PROMPT_ENHANCER_CLAUDE_MODEL,
+                DEFAULT_PROMPT_ENHANCER_CODEX_MODEL,
+                "prompt enhancer"
+        );
+    }
+
+    public JsonObject getCommitAiConfig() throws IOException {
+        return getAiFeatureConfig(
+                COMMIT_AI_KEY,
+                DEFAULT_COMMIT_AI_CLAUDE_MODEL,
+                DEFAULT_COMMIT_AI_CODEX_MODEL
+        );
+    }
+
+    public void setCommitAiConfig(String provider, String claudeModel, String codexModel) throws IOException {
+        setAiFeatureConfig(
+                COMMIT_AI_KEY,
+                provider,
+                claudeModel,
+                codexModel,
+                DEFAULT_COMMIT_AI_CLAUDE_MODEL,
+                DEFAULT_COMMIT_AI_CODEX_MODEL,
+                "commit AI"
+        );
+    }
+
+    private JsonObject getAiFeatureConfig(
+            String featureKey,
+            String defaultClaudeModel,
+            String defaultCodexModel
+    ) throws IOException {
+        JsonObject rootConfig = readConfig();
+        JsonObject featureConfig = getAiFeatureRootObject(rootConfig, featureKey);
+        String manualProvider = normalizeAiFeatureProvider(
+                featureConfig.has(AI_FEATURE_PROVIDER_KEY) && !featureConfig.get(AI_FEATURE_PROVIDER_KEY).isJsonNull()
+                        ? featureConfig.get(AI_FEATURE_PROVIDER_KEY).getAsString()
+                        : null
+        );
+        JsonObject models = getNormalizedAiFeatureModels(featureConfig, defaultClaudeModel, defaultCodexModel);
+        JsonObject availability = buildAiFeatureAvailability();
+        boolean claudeAvailable = availability.get(AI_FEATURE_PROVIDER_CLAUDE).getAsBoolean();
+        boolean codexAvailable = availability.get(AI_FEATURE_PROVIDER_CODEX).getAsBoolean();
+        ResolvedAiFeatureProvider resolvedProvider = resolveAiFeatureProvider(
+                manualProvider,
+                claudeAvailable,
+                codexAvailable
+        );
+
+        JsonObject response = new JsonObject();
+        if (manualProvider == null) {
+            response.add(AI_FEATURE_PROVIDER_KEY, JsonNull.INSTANCE);
+        } else {
+            response.addProperty(AI_FEATURE_PROVIDER_KEY, manualProvider);
+        }
+        response.add(AI_FEATURE_MODELS_KEY, models);
+        if (resolvedProvider.effectiveProvider == null) {
+            response.add(AI_FEATURE_EFFECTIVE_PROVIDER_KEY, JsonNull.INSTANCE);
+        } else {
+            response.addProperty(AI_FEATURE_EFFECTIVE_PROVIDER_KEY, resolvedProvider.effectiveProvider);
+        }
+        response.addProperty(AI_FEATURE_RESOLUTION_SOURCE_KEY, resolvedProvider.resolutionSource);
+        response.add(AI_FEATURE_AVAILABILITY_KEY, availability);
+        return response;
+    }
+
+    private void setAiFeatureConfig(
+            String featureKey,
+            String provider,
+            String claudeModel,
+            String codexModel,
+            String defaultClaudeModel,
+            String defaultCodexModel,
+            String featureLabel
+    ) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject featureConfig = getAiFeatureRootObject(config, featureKey);
+        String normalizedProvider = normalizeAiFeatureProvider(provider);
+        if (normalizedProvider == null) {
+            featureConfig.add(AI_FEATURE_PROVIDER_KEY, JsonNull.INSTANCE);
+        } else {
+            featureConfig.addProperty(AI_FEATURE_PROVIDER_KEY, normalizedProvider);
+        }
+        featureConfig.add(
+                AI_FEATURE_MODELS_KEY,
+                createAiFeatureModels(claudeModel, codexModel, defaultClaudeModel, defaultCodexModel)
+        );
+
+        config.add(featureKey, featureConfig);
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set " + featureLabel + " config: provider=" + normalizedProvider);
+    }
+
+    private JsonObject getAiFeatureRootObject(JsonObject rootConfig, String featureKey) {
+        if (rootConfig.has(featureKey) && rootConfig.get(featureKey).isJsonObject()) {
+            return rootConfig.getAsJsonObject(featureKey);
+        }
+        return new JsonObject();
+    }
+
+    private JsonObject buildAiFeatureAvailability() {
+        JsonObject availability = new JsonObject();
+        availability.addProperty(AI_FEATURE_PROVIDER_CLAUDE, isAiFeatureProviderAvailable(AI_FEATURE_PROVIDER_CLAUDE));
+        availability.addProperty(AI_FEATURE_PROVIDER_CODEX, isAiFeatureProviderAvailable(AI_FEATURE_PROVIDER_CODEX));
+        return availability;
+    }
+
+    private boolean isAiFeatureProviderAvailable(String provider) {
+        try {
+            DependencyManager dependencyManager = new DependencyManager();
+            if (AI_FEATURE_PROVIDER_CODEX.equals(provider)) {
+                return getActiveCodexProvider() != null && dependencyManager.isInstalled("codex-sdk");
+            }
+            return getActiveClaudeProvider() != null && dependencyManager.isInstalled("claude-sdk");
+        } catch (Exception e) {
+            LOG.warn("[CodemossSettings] Failed to resolve AI feature availability for " + provider + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private JsonObject getNormalizedAiFeatureModels(
+            JsonObject featureConfig,
+            String defaultClaudeModel,
+            String defaultCodexModel
+    ) {
+        if (featureConfig != null
+                && featureConfig.has(AI_FEATURE_MODELS_KEY)
+                && featureConfig.get(AI_FEATURE_MODELS_KEY).isJsonObject()) {
+            JsonObject rawModels = featureConfig.getAsJsonObject(AI_FEATURE_MODELS_KEY);
+            String claudeModel = rawModels.has(AI_FEATURE_PROVIDER_CLAUDE) && !rawModels.get(AI_FEATURE_PROVIDER_CLAUDE).isJsonNull()
+                    ? rawModels.get(AI_FEATURE_PROVIDER_CLAUDE).getAsString()
+                    : null;
+            String codexModel = rawModels.has(AI_FEATURE_PROVIDER_CODEX) && !rawModels.get(AI_FEATURE_PROVIDER_CODEX).isJsonNull()
+                    ? rawModels.get(AI_FEATURE_PROVIDER_CODEX).getAsString()
+                    : null;
+            return createAiFeatureModels(claudeModel, codexModel, defaultClaudeModel, defaultCodexModel);
+        }
+        return createAiFeatureModels(null, null, defaultClaudeModel, defaultCodexModel);
+    }
+
+    private JsonObject createAiFeatureModels(
+            String claudeModel,
+            String codexModel,
+            String defaultClaudeModel,
+            String defaultCodexModel
+    ) {
+        JsonObject models = new JsonObject();
+        models.addProperty(
+                AI_FEATURE_PROVIDER_CLAUDE,
+                normalizeAiFeatureModel(claudeModel, defaultClaudeModel)
+        );
+        models.addProperty(
+                AI_FEATURE_PROVIDER_CODEX,
+                normalizeAiFeatureModel(codexModel, defaultCodexModel)
+        );
+        return models;
+    }
+
+    private ResolvedAiFeatureProvider resolveAiFeatureProvider(
+            String manualProvider,
+            boolean claudeAvailable,
+            boolean codexAvailable
+    ) {
+        if (manualProvider != null) {
+            boolean manualProviderAvailable = AI_FEATURE_PROVIDER_CODEX.equals(manualProvider)
+                    ? codexAvailable
+                    : claudeAvailable;
+            if (manualProviderAvailable) {
+                return new ResolvedAiFeatureProvider(manualProvider, AI_FEATURE_RESOLUTION_MANUAL);
+            }
+            return new ResolvedAiFeatureProvider(null, AI_FEATURE_RESOLUTION_UNAVAILABLE);
+        }
+        if (codexAvailable) {
+            return new ResolvedAiFeatureProvider(AI_FEATURE_PROVIDER_CODEX, AI_FEATURE_RESOLUTION_AUTO);
+        }
+        if (claudeAvailable) {
+            return new ResolvedAiFeatureProvider(AI_FEATURE_PROVIDER_CLAUDE, AI_FEATURE_RESOLUTION_AUTO);
+        }
+        return new ResolvedAiFeatureProvider(null, AI_FEATURE_RESOLUTION_UNAVAILABLE);
+    }
+
+    private String normalizeAiFeatureProvider(String provider) {
+        if (provider == null) {
+            return null;
+        }
+        String normalized = provider.trim().toLowerCase();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        if (AI_FEATURE_PROVIDER_CLAUDE.equals(normalized) || AI_FEATURE_PROVIDER_CODEX.equals(normalized)) {
+            return normalized;
+        }
+        return null;
+    }
+
+    private String normalizeAiFeatureModel(String model, String defaultValue) {
+        if (model == null) {
+            return defaultValue;
+        }
+        String normalized = model.trim();
+        return normalized.isEmpty() ? defaultValue : normalized;
+    }
+
+    private static class ResolvedAiFeatureProvider {
+        private final String effectiveProvider;
+        private final String resolutionSource;
+
+        private ResolvedAiFeatureProvider(String effectiveProvider, String resolutionSource) {
+            this.effectiveProvider = effectiveProvider;
+            this.resolutionSource = resolutionSource;
+        }
+    }
+
     // ==================== Codex Provider Management ====================
 
     public List<JsonObject> getCodexProviders() throws IOException {
@@ -1068,7 +1699,96 @@ public class CodemossSettingsService {
     }
 
     public JsonObject getCurrentCodexConfig() throws IOException {
+        if (!isCodexLocalConfigAuthorized()) {
+            return new JsonObject();
+        }
         return codexProviderManager.getCurrentCodexConfig();
+    }
+
+    public boolean isCodexCliLoginAvailable() {
+        try {
+            if (!isCodexLocalConfigAuthorized()) {
+                return false;
+            }
+            return codexSettingsManager.isCodexCliLoginAvailable();
+        } catch (IOException e) {
+            LOG.warn("[CodemossSettings] Failed to check Codex local authorization: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public void applyCodexCliLoginToSettings() throws IOException {
+        codexSettingsManager.applyCodexCliLoginToSettings();
+    }
+
+    public void removeCodexCliLoginFromSettings() throws IOException {
+        codexSettingsManager.removeCodexCliLoginFromSettings();
+    }
+
+    public JsonObject readCodexCliLoginAccountInfo() {
+        try {
+            if (!isCodexLocalConfigAuthorized()) {
+                return null;
+            }
+            return codexSettingsManager.readCodexCliLoginAccountInfo();
+        } catch (IOException e) {
+            LOG.warn("[CodemossSettings] Failed to read Codex local authorization state: " + e.getMessage());
+            return null;
+        }
+    }
+
+    public boolean isCodexLocalConfigAuthorized() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has("codex") || !config.get("codex").isJsonObject()) {
+            return false;
+        }
+        JsonObject codex = config.getAsJsonObject("codex");
+        return codex.has("localConfigAuthorized")
+                && !codex.get("localConfigAuthorized").isJsonNull()
+                && codex.get("localConfigAuthorized").getAsBoolean();
+    }
+
+    public void setCodexLocalConfigAuthorized(boolean authorized) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject codex;
+        if (config.has("codex") && config.get("codex").isJsonObject()) {
+            codex = config.getAsJsonObject("codex");
+        } else {
+            codex = new JsonObject();
+            codex.add("providers", new JsonObject());
+            codex.addProperty("current", "");
+            config.add("codex", codex);
+        }
+
+        codex.addProperty("localConfigAuthorized", authorized);
+        writeConfig(config);
+    }
+
+    public String getCodexRuntimeAccessMode() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has("codex") || !config.get("codex").isJsonObject()) {
+            return CODEX_RUNTIME_ACCESS_INACTIVE;
+        }
+
+        JsonObject codex = config.getAsJsonObject("codex");
+        String currentId = codex.has("current") && !codex.get("current").isJsonNull()
+                ? codex.get("current").getAsString().trim()
+                : "";
+
+        if (CodexProviderManager.CODEX_CLI_LOGIN_PROVIDER_ID.equals(currentId)) {
+            return isCodexLocalConfigAuthorized()
+                    ? CODEX_RUNTIME_ACCESS_CLI_LOGIN
+                    : CODEX_RUNTIME_ACCESS_INACTIVE;
+        }
+
+        if (!currentId.isEmpty()
+                && codex.has("providers")
+                && codex.get("providers").isJsonObject()
+                && codex.getAsJsonObject("providers").has(currentId)) {
+            return CODEX_RUNTIME_ACCESS_MANAGED;
+        }
+
+        return CODEX_RUNTIME_ACCESS_INACTIVE;
     }
 
     public int saveCodexProviders(List<JsonObject> providers) throws IOException {

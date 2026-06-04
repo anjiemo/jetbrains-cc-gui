@@ -2,6 +2,16 @@ import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { DropdownItemProps } from '../types';
 
+const SVG_ICON_STYLE: React.CSSProperties = {
+  width: 16,
+  height: 16,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+const DISABLED_ITEM_STYLE: React.CSSProperties = { cursor: 'default' };
+
 /**
  * DropdownItem - Dropdown menu item component
  */
@@ -52,25 +62,22 @@ export const DropdownItem = ({
    * Render icon
    */
   const renderIcon = () => {
+    const icon = typeof item.icon === 'string' ? item.icon.trim() : '';
+    const isInlineSvgIcon = icon.startsWith('<svg');
+
     // If icon contains SVG tags, it's an inline SVG
-    if (item.icon?.startsWith('<svg')) {
+    if (isInlineSvgIcon) {
       return (
         <span
           className="dropdown-item-icon"
-          dangerouslySetInnerHTML={{ __html: item.icon }}
-          style={{
-            width: 16,
-            height: 16,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
+          dangerouslySetInnerHTML={{ __html: icon }}
+          style={SVG_ICON_STYLE}
         />
       );
     }
 
     // Otherwise use codicon class name
-    const iconClass = item.icon || getDefaultIconClass(item.type);
+    const iconClass = icon || getDefaultIconClass(item.type);
     return <span className={`dropdown-item-icon codicon ${iconClass}`} />;
   };
 
@@ -189,7 +196,7 @@ export const DropdownItem = ({
           handleMouseEnterItem();
         }}
         onMouseLeave={handleMouseLeaveItem}
-        style={isDisabled ? { cursor: 'default' } : undefined}
+        style={isDisabled ? DISABLED_ITEM_STYLE : undefined}
       >
         {renderIcon()}
         <div className="dropdown-item-content">

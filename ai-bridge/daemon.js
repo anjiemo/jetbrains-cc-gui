@@ -33,17 +33,21 @@ import {
   preconnectPersistent,
   shutdownPersistentRuntimes,
   abortCurrentTurn,
-  resetRuntimePersistent
+  resetRuntimePersistent,
+  getContextUsagePersistent
 } from './services/claude/persistent-query-service.js';
 import { injectNetworkEnvVars } from './config/api-config.js';
+import { cleanupStaleTempImages } from './services/claude/attachment-service.js';
 
 // =============================================================================
 // Network Environment Setup (must run before any HTTPS connection)
 // =============================================================================
 
-// Inject proxy and TLS settings from ~/.claude/settings.json BEFORE SDK
-// preloading or any other network activity.  Without this, users behind
-// corporate SSL-inspection proxies will get certificate verification errors.
+// Sync proxy and TLS settings from ~/.claude/settings.json BEFORE SDK
+// preloading or any other network activity, but only for explicitly
+// authorized Local settings.json / CLI Login modes. Without this, users behind
+// corporate SSL-inspection proxies in those modes will get certificate
+// verification errors.
 injectNetworkEnvVars();
 
 // =============================================================================
@@ -327,6 +331,8 @@ async function processRequest(request) {
       await preconnectPersistent(stdinData);
     } else if (provider === 'claude' && command === 'resetRuntime') {
       await resetRuntimePersistent(stdinData);
+    } else if (provider === 'claude' && command === 'getContextUsage') {
+      await getContextUsagePersistent(stdinData);
     } else {
       // Dispatch to the existing handlers for non-send commands.
       switch (provider) {
@@ -414,6 +420,10 @@ async function processRequest(request) {
 
   // Pre-load SDK
   await preloadSdks();
+
+  // Best-effort cleanup of stale temp image files (>24h). Fire-and-forget so
+  // it doesn't block daemon readiness.
+  cleanupStaleTempImages().catch(() => {});
 
   // Signal ready
   sendDaemonEvent('ready', {
@@ -510,6 +520,21 @@ async function processRequest(request) {
   // Periodically verify the Java parent is still alive. When IDEA crashes or is
   // force-killed, stdin may not close cleanly, leaving orphan daemon processes.
   // On Unix, process.ppid changes to 1 (init/launchd) when the parent dies.
+  //
+  // L11 fix: poll every 3s instead of 10s. The previous 10s window meant orphan
+  // daemons could linger for up to 10s after a hard IDE crash before noticing
+  // their parent was gone. 3s tightens the worst-case orphan duration. The
+  // check itself is a cheap kill(pid, 0) syscall + a comparison, so the
+  // increased polling rate is negligible overhead.
+  //
+  // Tuning guide:
+  //  - Lower (e.g. 1000)  → faster orphan detection at the cost of more wakeups.
+  //                         Useful when many concurrent daemons are expected.
+  //  - Higher (e.g. 10000) → matches the legacy behaviour; orphans may persist
+  //                         briefly visible in `ps`/`Activity Monitor`.
+  //  - Don't go below 500: `setInterval` precision degrades and the wakeup
+  //                         overhead starts to dominate on low-power machines.
+  const PPID_CHECK_INTERVAL_MS = 3000;
   const initialPpid = process.ppid;
   const ppidMonitor = setInterval(() => {
     const currentPpid = process.ppid;
@@ -539,7 +564,7 @@ async function processRequest(request) {
       isDaemonMode = false;
       _originalExit(0);
     }
-  }, 10000);
+  }, PPID_CHECK_INTERVAL_MS);
   ppidMonitor.unref();
 
   // --- Keep alive ---

@@ -1,109 +1,102 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import HistoryView from './components/history/HistoryView';
 import SettingsView from './components/settings';
-import type { SettingsTab } from './components/settings/SettingsSidebar';
 import { sendBridgeEvent } from './utils/bridge';
-import { ChatInputBox } from './components/ChatInputBox';
 import { preloadSlashCommands, forceRefreshPrompts } from './components/ChatInputBox/providers';
 import {
   useScrollBehavior,
-  useDialogManagement,
   useSessionManagement,
   useStreamingMessages,
   useWindowCallbacks,
   useRewindHandlers,
   useHistoryLoader,
-  useFileChanges,
-  useSubagents,
   useMessageQueue,
   useThemeInit,
   useContextActions,
   useMessageProcessing,
   useMessageSender,
-  useFileChangesManagement,
   useModelProviderState,
+  useChatComputations,
 } from './hooks';
-import type { ContextInfo, ViewMode } from './hooks';
-import { formatTime } from './utils/helpers';
-import { extractMarkdownContent } from './utils/copyUtils';
+import {
+  NEW_SESSION_COMMANDS,
+  RESUME_COMMANDS,
+  PLAN_COMMANDS,
+  CONTEXT_COMMANDS,
+} from './hooks/useMessageSender';
+import { applyDiffTheme, getStoredDiffTheme } from './utils/diffTheme';
 import type { Attachment, ChatInputBoxHandle } from './components/ChatInputBox/types';
-import { StatusPanel, StatusPanelErrorBoundary } from './components/StatusPanel';
-import { ToastContainer, type ToastMessage } from './components/Toast';
-import { ScrollControl } from './components/ScrollControl';
+import { ToastContainer } from './components/Toast';
 import { ChatHeader } from './components/ChatHeader';
-import { WelcomeScreen } from './components/WelcomeScreen';
-import { MessageList } from './components/MessageList';
-import { MessageAnchorRail } from './components/MessageAnchorRail';
-import { FILE_MODIFY_TOOL_NAMES, isToolName } from './utils/toolConstants';
-import type { RewindableMessage } from './components/RewindSelectDialog';
+import { ChatScreen } from './components/ChatScreen';
+import type { MessageListRevealHandle } from './components/ConversationSearch/types';
+import { useSubagentContextValues } from './contexts/SubagentContext';
+import { useMessages } from './contexts/MessagesContext';
+import { useSession } from './contexts/SessionContext';
+import { useUIState } from './contexts/UIStateContext';
+import { useDialogs } from './contexts/DialogContext';
 import { AppDialogs } from './components/AppDialogs';
-import { APP_VERSION } from './version/version';
-import type {
-  ClaudeMessage,
-  HistoryData,
-  TodoItem,
-  ToolResultBlock,
-} from './types';
-
-const DEFAULT_STATUS = 'ready';
+import { DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS } from './utils/permissionDialogTimeout';
 
 const App = () => {
   const { t } = useTranslation();
 
-  // ── Dialog management ──
+  // ── Dialog management (extracted to DialogContext, stage 4 of TASK-P1-01) ──
+  // Open* / set* are still needed by hooks (useWindowCallbacks, useRewindHandlers).
+  // Display state (permissionDialogOpen / askUserQuestionDialogOpen / etc.) is
+  // consumed directly inside <AppDialogs> via useDialogs().
   const {
-    permissionDialogOpen, currentPermissionRequest, openPermissionDialog,
-    handlePermissionApprove, handlePermissionApproveAlways, handlePermissionSkip,
-    askUserQuestionDialogOpen, currentAskUserQuestionRequest, openAskUserQuestionDialog,
-    handleAskUserQuestionSubmit, handleAskUserQuestionCancel,
-    planApprovalDialogOpen, currentPlanApprovalRequest, openPlanApprovalDialog,
-    handlePlanApprovalApprove, handlePlanApprovalReject,
-    rewindDialogOpen, setRewindDialogOpen, currentRewindRequest, setCurrentRewindRequest,
-    isRewinding, setIsRewinding, rewindSelectDialogOpen, setRewindSelectDialogOpen,
-  } = useDialogManagement({ t });
+    openPermissionDialog,
+    openAskUserQuestionDialog,
+    openPlanApprovalDialog,
+    openContextUsageDialog,
+    updateContextUsageData,
+    closeContextUsageDialog,
+    setRewindDialogOpen, setCurrentRewindRequest,
+    isRewinding, setIsRewinding, setRewindSelectDialogOpen,
+  } = useDialogs();
 
-  // ── Core state (shared across multiple hooks) ──
-  const [messages, setMessages] = useState<ClaudeMessage[]>([]);
-  const [_status, setStatus] = useState(DEFAULT_STATUS);
-  const [loading, setLoading] = useState(false);
-  const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
-  const [isThinking, setIsThinking] = useState(false);
-  const [streamingActive, setStreamingActive] = useState(false);
-  const [currentView, setCurrentView] = useState<ViewMode>('chat');
-  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab | undefined>(undefined);
-  const [historyData, setHistoryData] = useState<HistoryData | null>(null);
-  const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const [addModelDialogOpen, setAddModelDialogOpen] = useState(false);
+  // ── Messages flow state (extracted to MessagesContext, stage 1 of TASK-P1-01) ──
+  // Display state (loadingStartTime / isThinking) is consumed inside <ChatScreen>.
+  const {
+    messages, setMessages,
+    subagentHistories, setSubagentHistories,
+    setStatus,
+    loading, setLoading, setLoadingStartTime,
+    setIsThinking,
+    streamingActive, setStreamingActive,
+  } = useMessages();
+
+  // ── Session state (extracted to SessionContext, stage 2 of TASK-P1-01) ──
+  const {
+    currentSessionId, setCurrentSessionId,
+    customSessionTitle, setCustomSessionTitle,
+    historyData, setHistoryData,
+    currentSessionIdRef, customSessionTitleRef,
+  } = useSession();
+
+  // ── UI state (extracted to UIStateContext, stage 3 of TASK-P1-01) ──
+  // Dialog visibility (addModelDialog / changelog) is consumed inside AppDialogs.
+  const {
+    currentView, setCurrentView,
+    settingsInitialTab, setSettingsInitialTab,
+    toasts, addToast, dismissToast, clearToasts,
+    setContextInfo,
+    searchOpen, setSearchOpen,
+  } = useUIState();
+
+  // ── Permission dialog timeout (synced with backend config) ──
+  const [permissionDialogTimeoutSeconds, setPermissionDialogTimeoutSeconds] = useState(DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS);
+
+  // ── Local refs (don't trigger re-render, kept in App.tsx) ──
   const isFirstMountRef = useRef(true);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [customSessionTitle, setCustomSessionTitle] = useState<string | null>(null);
   const chatInputRef = useRef<ChatInputBoxHandle>(null);
-  const [draftInput, setDraftInput] = useState('');
 
-  // StatusPanel collapse state
+  // StatusPanel collapse state — kept in App.tsx because forceStatusUpdate is
+  // intentionally local: a tiny re-render trigger paired with userCollapsedRef.
   const userCollapsedRef = useRef(false);
   const [, forceStatusUpdate] = useState(0);
-
-  // Changelog dialog state (show once per version update)
-  const LAST_SEEN_VERSION_KEY = 'lastSeenChangelogVersion';
-  const [showChangelogDialog, setShowChangelogDialog] = useState(() => {
-    const lastSeen = localStorage.getItem(LAST_SEEN_VERSION_KEY);
-    return lastSeen !== APP_VERSION;
-  });
-  const handleCloseChangelog = useCallback(() => {
-    localStorage.setItem(LAST_SEEN_VERSION_KEY, APP_VERSION);
-    setShowChangelogDialog(false);
-  }, []);
-
-  // Context state (active file and selection)
-  const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
-
-  // Refs for stale closure prevention
-  const currentSessionIdRef = useRef(currentSessionId);
-  useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
-  const customSessionTitleRef = useRef(customSessionTitle);
-  useEffect(() => { customSessionTitleRef.current = customSessionTitle; }, [customSessionTitle]);
 
   // Message anchor node registry for anchor rail navigation
   const messageNodeMapRef = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -113,38 +106,36 @@ const App = () => {
     else { messageNodeMapRef.current.delete(id); }
   }, []);
 
+  // Imperative handle for the in-page search panel to expand collapsed earlier messages.
+  const messageListRef = useRef<MessageListRevealHandle | null>(null);
+
   // ── Theme & context actions ──
   useThemeInit();
   useContextActions();
 
+  // Apply diff theme on app startup so diff styles work before opening Settings.
+  useEffect(() => {
+    const ideTheme = window.__INITIAL_IDE_THEME__ ?? null;
+    applyDiffTheme(getStoredDiffTheme(), ideTheme);
+  }, []);
+
   // ── Scroll behavior ──
   const {
     messagesContainerRef, messagesEndRef, inputAreaRef,
-    isUserAtBottomRef, userPausedRef,
+    isUserAtBottomRef, isAutoScrollingRef, userPausedRef,
   } = useScrollBehavior({ currentView, messages, loading, streamingActive });
 
   // ── Streaming messages ──
   const {
-    streamingContentRef, isStreamingRef, useBackendStreamingRenderRef,
-    streamingMessageIndexRef, streamingTextSegmentsRef, activeTextSegmentIndexRef,
-    streamingThinkingSegmentsRef, activeThinkingSegmentIndexRef,
-    seenToolUseCountRef, contentUpdateTimeoutRef, thinkingUpdateTimeoutRef,
+    streamingContentRef, streamingThinkingRef, isStreamingRef, useBackendStreamingRenderRef,
+    streamingMessageIndexRef, contentUpdateTimeoutRef, thinkingUpdateTimeoutRef,
     lastContentUpdateRef, lastThinkingUpdateRef, autoExpandedThinkingKeysRef,
     streamingTurnIdRef, turnIdCounterRef,
     findLastAssistantIndex, extractRawBlocks,
     getOrCreateStreamingAssistantIndex, patchAssistantForStreaming,
   } = useStreamingMessages();
 
-  // ── Toast helpers ──
-  const addToast = useCallback((message: string, type: ToastMessage['type'] = 'info') => {
-    if (message === DEFAULT_STATUS || !message) return;
-    const id = `toast-${Date.now()}-${Math.random()}`;
-    setToasts((prev) => [...prev, { id, message, type }]);
-  }, []);
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((toast) => toast.id !== id));
-  }, []);
-  const clearToasts = useCallback(() => { setToasts([]); }, []);
+  // (Toast helpers moved to UIStateContext)
 
   // ── Model/Provider state ──
   const {
@@ -153,6 +144,7 @@ const App = () => {
     currentProviderRef,
     activeProviderConfig, claudeSettingsAlwaysThinkingEnabled,
     reasoningEffort, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
+    longContextEnabled,
     usagePercentage, usageUsedTokens, usageMaxTokens,
     setPermissionMode,
     setClaudePermissionMode, setCodexPermissionMode,
@@ -166,21 +158,79 @@ const App = () => {
     handleModeSelect, handleModelSelect, handleProviderSelect,
     handleReasoningChange, handleAgentSelect, handleToggleThinking,
     handleStreamingEnabledChange, handleSendShortcutChange,
-    handleAutoOpenFileEnabledChange,
+    handleAutoOpenFileEnabledChange, handleLongContextChange,
   } = useModelProviderState({ addToast, t });
 
   // ── Global drag event interception ──
   useEffect(() => {
-    const prevent = (e: DragEvent) => { e.preventDefault(); e.stopPropagation(); };
-    document.addEventListener('dragover', prevent);
-    document.addEventListener('drop', prevent);
-    document.addEventListener('dragenter', prevent);
+    const preventExternalDrop = (e: DragEvent) => {
+      const types = Array.from(e.dataTransfer?.types ?? []);
+      const isExternalDrop = types.includes('Files') || types.includes('text/uri-list');
+      if (!isExternalDrop) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    document.addEventListener('dragover', preventExternalDrop);
+    document.addEventListener('drop', preventExternalDrop);
+    document.addEventListener('dragenter', preventExternalDrop);
     return () => {
-      document.removeEventListener('dragover', prevent);
-      document.removeEventListener('drop', prevent);
-      document.removeEventListener('dragenter', prevent);
+      document.removeEventListener('dragover', preventExternalDrop);
+      document.removeEventListener('drop', preventExternalDrop);
+      document.removeEventListener('dragenter', preventExternalDrop);
     };
   }, []);
+
+  // ── Close in-conversation search panel when navigating away from chat ──
+  // Split from the hotkey effect below so that toggling `searchOpen` does
+  // NOT rebind the global keydown listener every time the panel opens/closes.
+  useEffect(() => {
+    if (currentView !== 'chat' && searchOpen) {
+      setSearchOpen(false);
+    }
+  }, [currentView, searchOpen, setSearchOpen]);
+
+  // ── In-conversation search hotkey (Cmd+F on macOS, Ctrl+F elsewhere) ──
+  // Only active in chat view. Settings / history use their own search
+  // (HistoryFilters) or none at all — we deliberately let the platform
+  // handle Cmd+F there.
+  //
+  // We deliberately listen for ONLY the platform-appropriate modifier:
+  // macOS users use Ctrl+F as the Emacs-style "forward-char" cursor move,
+  // so we MUST NOT capture Ctrl+F on macOS. This is a real regression
+  // surfaced by code review.
+  //
+  // Platform detection prefers `navigator.userAgentData.platform` (modern,
+  // non-deprecated) and falls back to `userAgent` string sniffing for
+  // JCEF / older Chromium where userAgentData may be unavailable.
+  // `navigator.platform` is intentionally NOT used — it is deprecated and
+  // returns inconsistent values inside JCEF.
+  useEffect(() => {
+    if (currentView !== 'chat') return;
+    const isMac = (() => {
+      if (typeof navigator === 'undefined') return false;
+      const uaData = (navigator as Navigator & {
+        userAgentData?: { platform?: string };
+      }).userAgentData;
+      const platform = uaData?.platform ?? navigator.userAgent ?? '';
+      return /mac|iphone|ipad|ipod/i.test(platform);
+    })();
+    const handler = (e: KeyboardEvent) => {
+      const key = e.key;
+      if (key !== 'f' && key !== 'F') return;
+      const isFind = isMac ? (e.metaKey && !e.ctrlKey) : (e.ctrlKey && !e.metaKey);
+      if (!isFind) return;
+      // Don't fight IME composition.
+      if (e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setSearchOpen(true);
+    };
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
+    // setSearchOpen is a stable useState setter; intentionally omitted from
+    // deps so we don't rebind the global listener on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentView]);
 
   // ── Slash command preloading ──
   useEffect(() => {
@@ -200,10 +250,11 @@ const App = () => {
     showNewSessionConfirm, showInterruptConfirm,
     suppressNextStatusToastRef,
     createNewSession, forceCreateNewSession,
+    forceCreateNewSessionWithProvider,
     handleConfirmNewSession, handleCancelNewSession,
     handleConfirmInterrupt, handleCancelInterrupt,
-    loadHistorySession, deleteHistorySession, exportHistorySession,
-    toggleFavoriteSession, updateHistoryTitle,
+    loadHistorySession, deleteHistorySession, deleteHistorySessions, exportHistorySession,
+    toggleFavoriteSession, updateHistoryTitle, applyHistoryTitleLocal,
   } = useSessionManagement({
     messages, loading, historyData, currentSessionId,
     setHistoryData, setMessages, setCurrentView, setCurrentSessionId,
@@ -228,13 +279,12 @@ const App = () => {
     setSdkStatus, setSdkStatusLoaded,
     setIsRewinding, setRewindDialogOpen, setCurrentRewindRequest,
     setContextInfo, setSelectedAgent,
+    setSubagentHistories,
     currentProviderRef, messagesContainerRef, isUserAtBottomRef, userPausedRef,
     suppressNextStatusToastRef,
-    streamingContentRef, isStreamingRef, useBackendStreamingRenderRef,
+    streamingContentRef, streamingThinkingRef, isStreamingRef, useBackendStreamingRenderRef,
     autoExpandedThinkingKeysRef,
-    streamingTextSegmentsRef, activeTextSegmentIndexRef,
-    streamingThinkingSegmentsRef, activeThinkingSegmentIndexRef,
-    seenToolUseCountRef, streamingMessageIndexRef,
+    streamingMessageIndexRef,
     streamingTurnIdRef, turnIdCounterRef,
     lastContentUpdateRef, contentUpdateTimeoutRef,
     lastThinkingUpdateRef, thinkingUpdateTimeoutRef,
@@ -242,7 +292,11 @@ const App = () => {
     getOrCreateStreamingAssistantIndex, patchAssistantForStreaming,
     syncActiveProviderModelMapping,
     openPermissionDialog, openAskUserQuestionDialog, openPlanApprovalDialog,
-    customSessionTitleRef, currentSessionIdRef, updateHistoryTitle,
+    openContextUsageDialog, updateContextUsageData,
+    closeContextUsageDialog,
+    customSessionTitleRef, currentSessionIdRef, updateHistoryTitle, applyHistoryTitleLocal,
+    setCustomSessionTitle,
+    setPermissionDialogTimeoutSeconds,
   });
 
   // ── Message processing ──
@@ -251,34 +305,13 @@ const App = () => {
     mergedMessages, sentAttachmentsRef,
   } = useMessageProcessing({ messages, currentSessionId, t });
 
-  // Find tool result (stable ref to avoid re-renders)
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
-  const findToolResult = useCallback((toolUseId?: string, messageIndex?: number): ToolResultBlock | null => {
-    if (!toolUseId || typeof messageIndex !== 'number') return null;
-    const currentMessages = messagesRef.current;
-    for (let i = 0; i < currentMessages.length; i += 1) {
-      const candidate = currentMessages[i];
-      const raw = candidate.raw;
-      if (!raw || typeof raw === 'string') continue;
-      const content = raw.content ?? raw.message?.content;
-      if (!Array.isArray(content)) continue;
-      const resultBlock = content.find(
-        (block): block is ToolResultBlock =>
-          Boolean(block) && block.type === 'tool_result' && block.tool_use_id === toolUseId,
-      );
-      if (resultBlock) return resultBlock;
-    }
-    return null;
-  }, []);
-
   // ── Message sender ──
   // Wrap handleProviderSelect to also clear messages and input (like creating a new session)
   const wrappedHandleProviderSelect = useCallback((providerId: string) => {
-    setMessages([]);
     chatInputRef.current?.clear();
     handleProviderSelect(providerId);
-  }, [handleProviderSelect]);
+    forceCreateNewSessionWithProvider(providerId);
+  }, [forceCreateNewSessionWithProvider, handleProviderSelect]);
 
   const {
     handleSubmit: hookHandleSubmit,
@@ -286,13 +319,17 @@ const App = () => {
     interruptSession,
   } = useMessageSender({
     t, addToast,
-    currentProvider, permissionMode, selectedAgent,
+    currentProvider, selectedModel, permissionMode, selectedAgent,
     sdkStatusLoaded, currentSdkInstalled,
     sentAttachmentsRef, chatInputRef, messagesContainerRef,
     isUserAtBottomRef, userPausedRef, isStreamingRef,
     setMessages, setLoading, setLoadingStartTime, setStreamingActive,
     setSettingsInitialTab, setCurrentView,
     forceCreateNewSession,
+    handleModeSelect,
+    longContextEnabled,
+    openContextUsageDialog,
+    closeContextUsageDialog,
   });
 
   // ── Message queue ──
@@ -302,16 +339,33 @@ const App = () => {
     dequeue: dequeueMessage,
   } = useMessageQueue({ isLoading: loading, onExecute: executeMessage });
 
-  // handleSubmit with queue support (new session commands bypass loading check)
+  // handleSubmit with queue support (new session and local commands bypass loading check)
   const handleSubmit = useCallback((content: string, attachments?: Attachment[]) => {
     const text = content.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
     if (!text && !hasAttachments) return;
-    // New session commands work even while loading
+    // Local commands work even while loading
     if (text.startsWith('/')) {
       const command = text.split(/\s+/)[0].toLowerCase();
-      if (['/new', '/clear', '/reset'].includes(command)) {
+      // New session commands
+      if (NEW_SESSION_COMMANDS.has(command)) {
         forceCreateNewSession();
+        return;
+      }
+      // /resume - open history view
+      if (RESUME_COMMANDS.has(command)) {
+        setCurrentView('history');
+        return;
+      }
+      // /plan - switch to plan mode (Claude only; Codex sends as normal text)
+      if (PLAN_COMMANDS.has(command) && currentProvider === 'claude') {
+        handleModeSelect('plan');
+        addToast(t('chat.planModeEnabled', { defaultValue: 'Plan mode enabled' }), 'info');
+        return;
+      }
+      // /context - handled locally even while loading
+      if (CONTEXT_COMMANDS.has(command)) {
+        hookHandleSubmit(content, attachments);
         return;
       }
     }
@@ -321,33 +375,32 @@ const App = () => {
       return;
     }
     hookHandleSubmit(content, attachments);
-  }, [loading, enqueueMessage, hookHandleSubmit, forceCreateNewSession]);
+  }, [loading, enqueueMessage, hookHandleSubmit, forceCreateNewSession, currentProvider, handleModeSelect, setCurrentView, addToast, t]);
 
-  // ── File changes management ──
+  // ── Chat-view computations (stage 5 of TASK-P1-01) ──
   const {
-    processedFiles, baseMessageIndex,
-    handleUndoFile, handleDiscardAll: handleDiscardAllRaw, handleKeepAll,
-  } = useFileChangesManagement({
-    currentSessionId, currentSessionIdRef, messages,
-    getContentBlocks, findToolResult,
+    findToolResult, getToolResultRaw,
+    fileChangeMgmt,
+    filteredFileChanges, subagents, globalTodos, rewindableMessages, sessionTitle,
+  } = useChatComputations({
+    t, messages, mergedMessages, customSessionTitle, streamingActive, currentProvider,
+    currentSessionId, currentSessionIdRef,
+    getMessageText, getContentBlocks,
   });
 
-  const fileChanges = useFileChanges({
-    messages, getContentBlocks, findToolResult,
-    startFromIndex: baseMessageIndex,
-  });
+  const { handleUndoFile, handleDiscardAll: handleDiscardAllRaw, handleKeepAll } = fileChangeMgmt;
+  const onDiscardAll = useCallback(
+    () => { handleDiscardAllRaw(filteredFileChanges); },
+    [handleDiscardAllRaw, filteredFileChanges],
+  );
 
-  const filteredFileChanges = useMemo(() => {
-    if (processedFiles.length === 0) return fileChanges;
-    return fileChanges.filter(fc => !processedFiles.includes(fc.filePath));
-  }, [fileChanges, processedFiles]);
+  // Stabilize context value references for SubagentContext consumers.
+  const { subagentHistoryCtxValue, sessionIdCtxValue } = useSubagentContextValues(subagentHistories, currentSessionId);
 
-  const onDiscardAll = useCallback(() => {
-    handleDiscardAllRaw(filteredFileChanges);
-  }, [handleDiscardAllRaw, filteredFileChanges]);
-
-  // ── Subagents ──
-  const subagents = useSubagents({ messages, getContentBlocks, findToolResult });
+  const handleNavigateToProviderSettings = useCallback(() => {
+    setSettingsInitialTab('providers');
+    setCurrentView('settings');
+  }, [setSettingsInitialTab, setCurrentView]);
 
   // ── Rewind handlers ──
   const {
@@ -359,76 +412,7 @@ const App = () => {
     setIsRewinding, isRewinding,
   });
 
-  // ── Computed values ──
-
-  // Extract the latest todos from messages for global TodoPanel display
-  const globalTodos = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.type !== 'assistant') continue;
-      const blocks = getContentBlocks(msg);
-      for (let j = blocks.length - 1; j >= 0; j--) {
-        const block = blocks[j];
-        if (
-          block.type === 'tool_use' &&
-          block.name?.toLowerCase() === 'todowrite' &&
-          Array.isArray((block.input as { todos?: TodoItem[] })?.todos)
-        ) {
-          return (block.input as { todos: TodoItem[] }).todos;
-        }
-      }
-    }
-    return [];
-  }, [messages]);
-
-  const canRewindFromMessageIndex = (userMessageIndex: number) => {
-    if (userMessageIndex < 0 || userMessageIndex >= mergedMessages.length) return false;
-    const current = mergedMessages[userMessageIndex];
-    if (current.type !== 'user') return false;
-    if ((current.content || '').trim() === '[tool_result]') return false;
-    const raw = current.raw;
-    if (raw && typeof raw !== 'string') {
-      const content = (raw as any).content ?? (raw as any).message?.content;
-      if (Array.isArray(content) && content.some((block: any) => block && block.type === 'tool_result')) {
-        return false;
-      }
-    }
-    for (let i = userMessageIndex + 1; i < mergedMessages.length; i += 1) {
-      const msg = mergedMessages[i];
-      if (msg.type === 'user') break;
-      const blocks = getContentBlocks(msg);
-      for (const block of blocks) {
-        if (block.type !== 'tool_use') continue;
-        if (isToolName(block.name, FILE_MODIFY_TOOL_NAMES)) return true;
-      }
-    }
-    return false;
-  };
-
-  const rewindableMessages = useMemo((): RewindableMessage[] => {
-    if (currentProvider !== 'claude') return [];
-    const result: RewindableMessage[] = [];
-    for (let i = 0; i < mergedMessages.length - 1; i++) {
-      if (!canRewindFromMessageIndex(i)) continue;
-      const message = mergedMessages[i];
-      const content = message.content || getMessageText(message);
-      const timestamp = message.timestamp ? formatTime(message.timestamp) : undefined;
-      const messagesAfterCount = mergedMessages.length - i - 1;
-      result.push({ messageIndex: i, message, displayContent: content, timestamp, messagesAfterCount });
-    }
-    return result;
-  }, [mergedMessages, currentProvider]);
-
   const statusPanelExpanded = !userCollapsedRef.current;
-
-  const sessionTitle = useMemo(() => {
-    if (customSessionTitle) return customSessionTitle;
-    if (messages.length === 0) return t('common.newSession');
-    const firstUserMessage = messages.find((message) => message.type === 'user');
-    if (!firstUserMessage) return t('common.newSession');
-    const text = getMessageText(firstUserMessage);
-    return text.length > 15 ? `${text.substring(0, 15)}...` : text;
-  }, [customSessionTitle, messages, t, getMessageText]);
 
   // ── Render ──
   return (
@@ -446,6 +430,7 @@ const App = () => {
           setSettingsInitialTab(undefined);
           setCurrentView('settings');
         }}
+        onOpenSearch={() => setSearchOpen(true)}
         titleEditable
         onTitleChange={(newTitle) => {
           setCustomSessionTitle(newTitle);
@@ -466,181 +451,98 @@ const App = () => {
           onSendShortcutChange={handleSendShortcutChange}
           autoOpenFileEnabled={autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+          permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
+          onPermissionDialogTimeoutChange={setPermissionDialogTimeoutSeconds}
         />
       ) : currentView === 'chat' ? (
-        <>
-          <div className="messages-shell">
-            <MessageAnchorRail
-              messages={mergedMessages}
-              collapsedCount={anchorCollapsedCount}
-              containerRef={messagesContainerRef}
-              messageNodeMap={messageNodeMapRef}
-            />
-            <div className="messages-container" ref={messagesContainerRef}>
-              {messages.length === 0 && (
-                <WelcomeScreen
-                  currentProvider={currentProvider}
-                  currentModelId={selectedModel}
-                  t={t}
-                  onProviderChange={wrappedHandleProviderSelect}
-                  onVersionClick={() => setShowChangelogDialog(true)}
-                />
-              )}
-
-              <MessageList
-                messages={mergedMessages}
-                streamingActive={streamingActive}
-                isThinking={isThinking}
-                loading={loading}
-                loadingStartTime={loadingStartTime}
-                t={t}
-                getMessageText={getMessageText}
-                getContentBlocks={getContentBlocks}
-                findToolResult={findToolResult}
-                extractMarkdownContent={extractMarkdownContent}
-                messagesEndRef={messagesEndRef}
-                onMessageNodeRef={handleMessageNodeRef}
-                onCollapsedCountChange={setAnchorCollapsedCount}
-                onNavigateToProviderSettings={() => {
-                  setSettingsInitialTab('providers');
-                  setCurrentView('settings');
-                }}
-              />
-            </div>
-          </div>
-
-          {/* Scroll control button */}
-          <ScrollControl containerRef={messagesContainerRef} inputAreaRef={inputAreaRef} />
-        </>
+        <ChatScreen
+          mergedMessages={mergedMessages}
+          getMessageText={getMessageText}
+          getContentBlocks={getContentBlocks}
+          findToolResult={findToolResult}
+          getToolResultRaw={getToolResultRaw}
+          subagents={subagents}
+          globalTodos={globalTodos}
+          filteredFileChanges={filteredFileChanges}
+          subagentHistoryCtxValue={subagentHistoryCtxValue}
+          sessionIdCtxValue={sessionIdCtxValue}
+          chatInputRef={chatInputRef}
+          messagesContainerRef={messagesContainerRef}
+          messagesEndRef={messagesEndRef}
+          inputAreaRef={inputAreaRef}
+          messageNodeMapRef={messageNodeMapRef}
+          userCollapsedRef={userCollapsedRef}
+          messageListRef={messageListRef}
+          isAutoScrollingRef={isAutoScrollingRef}
+          anchorCollapsedCount={anchorCollapsedCount}
+          setAnchorCollapsedCount={setAnchorCollapsedCount}
+          onMessageNodeRef={handleMessageNodeRef}
+          statusPanelExpanded={statusPanelExpanded}
+          forceStatusUpdate={forceStatusUpdate}
+          onUndoFile={handleUndoFile}
+          onDiscardAll={onDiscardAll}
+          onKeepAll={handleKeepAll}
+          onSubmit={handleSubmit}
+          onInterrupt={interruptSession}
+          onRewind={handleOpenRewindSelectDialog}
+          onNavigateToProviderSettings={handleNavigateToProviderSettings}
+          onProviderSelect={wrappedHandleProviderSelect}
+          currentProvider={currentProvider}
+          selectedModel={selectedModel}
+          permissionMode={permissionMode}
+          selectedAgent={selectedAgent}
+          sdkStatusLoaded={sdkStatusLoaded}
+          currentSdkInstalled={currentSdkInstalled}
+          activeProviderConfig={activeProviderConfig}
+          claudeSettingsAlwaysThinkingEnabled={claudeSettingsAlwaysThinkingEnabled}
+          reasoningEffort={reasoningEffort}
+          streamingEnabledSetting={streamingEnabledSetting}
+          sendShortcut={sendShortcut}
+          autoOpenFileEnabled={autoOpenFileEnabled}
+          longContextEnabled={longContextEnabled}
+          usagePercentage={usagePercentage}
+          usageUsedTokens={usageUsedTokens}
+          usageMaxTokens={usageMaxTokens}
+          onModeSelect={handleModeSelect}
+          onModelSelect={handleModelSelect}
+          onAgentSelect={handleAgentSelect}
+          onReasoningChange={handleReasoningChange}
+          onToggleThinking={handleToggleThinking}
+          onStreamingEnabledChange={handleStreamingEnabledChange}
+          onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+          onLongContextChange={handleLongContextChange}
+          messageQueue={messageQueue}
+          onRemoveFromQueue={dequeueMessage}
+        />
       ) : (
         <HistoryView
           historyData={historyData}
           currentProvider={currentProvider}
           onLoadSession={loadHistorySession}
           onDeleteSession={deleteHistorySession}
+          onDeleteSessions={deleteHistorySessions}
           onExportSession={exportHistorySession}
           onToggleFavorite={toggleFavoriteSession}
           onUpdateTitle={updateHistoryTitle}
         />
       )}
 
-      {currentView === 'chat' && (
-        <>
-          <StatusPanelErrorBoundary>
-            <StatusPanel
-              todos={globalTodos}
-              fileChanges={filteredFileChanges}
-              subagents={subagents}
-              expanded={statusPanelExpanded}
-              isStreaming={streamingActive}
-              onUndoFile={handleUndoFile}
-              onDiscardAll={onDiscardAll}
-              onKeepAll={handleKeepAll}
-            />
-          </StatusPanelErrorBoundary>
-          <div className="input-area" ref={inputAreaRef}>
-            <ChatInputBox
-              ref={chatInputRef}
-              isLoading={loading}
-              selectedModel={selectedModel}
-              permissionMode={permissionMode}
-              currentProvider={currentProvider}
-              usagePercentage={usagePercentage}
-              usageUsedTokens={usageUsedTokens}
-              usageMaxTokens={usageMaxTokens}
-              showUsage={true}
-              alwaysThinkingEnabled={activeProviderConfig?.settingsConfig?.alwaysThinkingEnabled ?? claudeSettingsAlwaysThinkingEnabled}
-              placeholder={sendShortcut === 'cmdEnter' ? t('chat.inputPlaceholderCmdEnter') : t('chat.inputPlaceholderEnter')}
-              sdkInstalled={currentSdkInstalled}
-              sdkStatusLoading={!sdkStatusLoaded}
-              onInstallSdk={() => {
-                setSettingsInitialTab('dependencies');
-                setCurrentView('settings');
-              }}
-              value={draftInput}
-              onInput={setDraftInput}
-              onSubmit={handleSubmit}
-              onStop={interruptSession}
-              onModeSelect={handleModeSelect}
-              onModelSelect={handleModelSelect}
-              onProviderSelect={wrappedHandleProviderSelect}
-              reasoningEffort={reasoningEffort}
-              onReasoningChange={handleReasoningChange}
-              onToggleThinking={handleToggleThinking}
-              streamingEnabled={streamingEnabledSetting}
-              onStreamingEnabledChange={handleStreamingEnabledChange}
-              sendShortcut={sendShortcut}
-              selectedAgent={selectedAgent}
-              onAgentSelect={handleAgentSelect}
-              activeFile={contextInfo?.file}
-              selectedLines={contextInfo?.startLine !== undefined && contextInfo?.endLine !== undefined
-                ? (contextInfo.startLine === contextInfo.endLine
-                    ? `L${contextInfo.startLine}`
-                    : `L${contextInfo.startLine}-${contextInfo.endLine}`)
-                : undefined}
-              onClearContext={() => setContextInfo(null)}
-              onOpenAgentSettings={() => {
-                setSettingsInitialTab('agents');
-                setCurrentView('settings');
-              }}
-              onOpenPromptSettings={() => {
-                setSettingsInitialTab('prompts');
-                setCurrentView('settings');
-              }}
-              onOpenModelSettings={() => {
-                setAddModelDialogOpen(true);
-              }}
-              hasMessages={messages.length > 0}
-              onRewind={handleOpenRewindSelectDialog}
-              statusPanelExpanded={statusPanelExpanded}
-              onToggleStatusPanel={() => { userCollapsedRef.current = !userCollapsedRef.current; forceStatusUpdate(c => c + 1); }}
-              addToast={addToast}
-              messageQueue={messageQueue}
-              onRemoveFromQueue={dequeueMessage}
-              autoOpenFileEnabled={autoOpenFileEnabled}
-              onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
-            />
-          </div>
-        </>
-      )}
-
       <div id="image-preview-root" />
 
       <AppDialogs
-        t={t}
         showNewSessionConfirm={showNewSessionConfirm}
         onConfirmNewSession={handleConfirmNewSession}
         onCancelNewSession={handleCancelNewSession}
         showInterruptConfirm={showInterruptConfirm}
         onConfirmInterrupt={handleConfirmInterrupt}
         onCancelInterrupt={handleCancelInterrupt}
-        permissionDialogOpen={permissionDialogOpen}
-        currentPermissionRequest={currentPermissionRequest}
-        onPermissionApprove={handlePermissionApprove}
-        onPermissionSkip={handlePermissionSkip}
-        onPermissionApproveAlways={handlePermissionApproveAlways}
-        askUserQuestionDialogOpen={askUserQuestionDialogOpen}
-        currentAskUserQuestionRequest={currentAskUserQuestionRequest}
-        onAskUserQuestionSubmit={handleAskUserQuestionSubmit}
-        onAskUserQuestionCancel={handleAskUserQuestionCancel}
-        planApprovalDialogOpen={planApprovalDialogOpen}
-        currentPlanApprovalRequest={currentPlanApprovalRequest}
-        onPlanApprovalApprove={handlePlanApprovalApprove}
-        onPlanApprovalReject={handlePlanApprovalReject}
-        rewindSelectDialogOpen={rewindSelectDialogOpen}
         rewindableMessages={rewindableMessages}
         onRewindSelect={handleRewindSelect}
         onRewindSelectCancel={handleRewindSelectCancel}
-        rewindDialogOpen={rewindDialogOpen}
-        currentRewindRequest={currentRewindRequest}
-        isRewinding={isRewinding}
         onRewindConfirm={handleRewindConfirm}
         onRewindCancel={handleRewindCancel}
-        showChangelogDialog={showChangelogDialog}
-        onCloseChangelog={handleCloseChangelog}
-        addModelDialogOpen={addModelDialogOpen}
-        onCloseAddModel={() => setAddModelDialogOpen(false)}
         currentProvider={currentProvider}
+        permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
       />
     </>
   );

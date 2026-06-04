@@ -12,6 +12,7 @@
     "close": "關閉",
     "newSession": "新會話",
     "newTab": "新標籤頁",
+    "dontAskAgain": "不再詢問",
     "history": "歷史記錄",
     "settings": "設定",
     "thinking": "思考",
@@ -87,8 +88,34 @@
     "attachmentFile": "[附件: {{fileName}}]",
     "unknownFile": "Unknown file",
     "attachmentsUploaded": "[已上傳附件]",
-    "streamingConnected": "Claude 已成功連接，正在理解問題",
-    "showEarlierMessages": "顯示之前的 {{count}} 則訊息"
+    "streamingConnected": "{{provider}} 已成功連接，正在理解問題",
+    "showEarlierMessages": "顯示之前的 {{count}} 則訊息",
+    "totalDuration": "本次耗時",
+    "search": {
+      "ariaLabel": "在對話中搜尋",
+      "placeholder": "在對話中搜尋...",
+      "next": "下一個符合 (Enter)",
+      "previous": "上一個符合 (Shift+Enter)",
+      "close": "關閉 (Esc)",
+      "counter": "{{current}}/{{total}}",
+      "noResults": "無結果",
+      "searching": "搜尋中...",
+      "expandedHint": "已展開 {{count}} 則早期訊息",
+      "matchCase": "區分大小寫 (Alt+C)",
+      "wholeWord": "全字符合 (Alt+W)",
+      "regex": "正規表達式 (Alt+R)",
+      "invalidRegex": "正規表達式無效",
+      "openTooltip": "在對話中搜尋 (Cmd/Ctrl+F)"
+    },
+    "compactSummary": {
+      "summarizedConversation": "已總結的對話",
+      "compactSummary": "對話摘要",
+      "messagesUpTo": "已總結此節點之前的 {{count}} 則訊息",
+      "messagesFrom": "已總結此節點之後的 {{count}} 則訊息",
+      "userContext": "補充說明：「{{context}}」",
+      "expand": "展開摘要",
+      "collapse": "摺疊摘要"
+    }
   },
   "settings": {
     "title": "設定",
@@ -111,6 +138,7 @@
       },
       "language": {
         "label": "介面語言",
+        "followIde": "跟隨 IDE",
         "simplifiedChinese": "简体中文",
         "traditionalChinese": "繁體中文",
         "english": "English",
@@ -119,7 +147,8 @@
         "french": "Français",
         "japanese": "日本語",
         "russian": "Русский",
-        "korean": "한국어"
+        "korean": "한국어",
+        "portuguese": "Português (Brasil)"
       },
       "nodePath": {
         "label": "Node.js 路徑",
@@ -144,8 +173,28 @@
         "level6": "最大（140%）"
       },
       "editorFont": {
-        "label": "字體（跟隨編輯器字體）",
-        "hint": "此處暫時不可修改，如需修改，請在 IDEA 設定 → 編輯器 → 字體 中調整（重啟 IDEA 後本外掛字體生效）"
+        "label": "UI 字體",
+        "hint": "這裡修改的是外掛介面字體。程式碼可以使用獨立的程式碼字體。",
+        "followOption": "跟隨 IDEA UI 字體（{{font}}）",
+        "customOption": "自訂 UI 字體檔案",
+        "customPathLabel": "UI 字體檔案路徑",
+        "customPathPlaceholder": "選擇或輸入 .ttf / .otf UI 字體檔案路徑",
+        "browse": "瀏覽",
+        "warningUnavailable": "UI 字體不可用，目前已回退到 IDEA UI 字體",
+        "statusFollowEditor": "目前跟隨 IDEA UI 字體：{{font}}",
+        "statusCustom": "目前使用自訂 UI 字體：{{font}}"
+      },
+      "codeFont": {
+        "label": "程式碼字體",
+        "hint": "Markdown 程式碼和命令區塊會使用這個字體。",
+        "followOption": "跟隨編輯器字體（{{font}}）",
+        "customOption": "自訂程式碼字體檔案",
+        "customPathLabel": "程式碼字體檔案路徑",
+        "customPathPlaceholder": "選擇或輸入 .ttf / .otf 程式碼字體檔案路徑",
+        "browse": "瀏覽",
+        "warningUnavailable": "程式碼字體不可用，目前已回退到編輯器字體",
+        "statusFollowEditor": "目前跟隨編輯器字體：{{font}}",
+        "statusCustom": "目前使用自訂程式碼字體：{{font}}"
       },
       "streaming": {
         "label": "Streaming",
@@ -159,11 +208,31 @@
         "disabled": "已停用",
         "hint": "開啟後，在專案樹選擇檔案時會自動將檔案路徑告訴 AI（注意：只傳遞檔案路徑，不傳檔案內容）。關閉後需要手動操作。"
       },
+      "promptEnhancer": {
+        "label": "增強提示詞",
+        "modelLabel": "增強模型",
+        "resetToDefault": "恢復預設",
+        "providerAvailable": "可用",
+        "providerUnavailable": "目前不可用",
+        "provider": {
+          "claude": "Claude Code",
+          "codex": "Codex"
+        },
+        "currentProviderAuto": "目前使用自動選擇：{{provider}}",
+        "currentProviderManual": "目前使用手動選擇的 provider：{{provider}}",
+        "currentProviderUnavailable": "目前所選 provider 不可用：{{provider}}"
+      },
       "diffExpanded": {
         "label": "預設展開差異",
         "enabled": "已展開",
         "disabled": "已折疊",
         "hint": "開啟後，聊天中的程式碼差異將預設展開顯示。關閉後，差異預設摺疊，可點擊展開。"
+      },
+      "taskCompletionNotification": {
+        "label": "任務完成通知",
+        "enabled": "已開啟",
+        "disabled": "已關閉",
+        "hint": "開啟後，當 AI 任務完成時顯示系統通知。關閉後不顯示系統通知。"
       },
       "sendShortcut": {
         "label": "發送快捷鍵",
@@ -171,6 +240,11 @@
         "enterDesc": "按 Enter 發送訊息，Shift+Enter 換行",
         "cmdEnter": "⌘/Ctrl+Enter 發送",
         "cmdEnterDesc": "按 ⌘/Ctrl+Enter 發送訊息，Enter 換行"
+      },
+      "permissionDialogTimeout": {
+        "label": "權限與提問對話框超時時間",
+        "unit": "秒",
+        "hint": "設定 Claude 提問對話框和權限請求對話框的超時時間（30~3600 秒）。超時後對話框將自動關閉，Claude 會繼續執行。"
       },
       "chatBgColor": {
         "label": "聊天背景色",
@@ -183,6 +257,12 @@
         "custom": "自訂",
         "reset": "恢復預設",
         "hint": "自訂您的訊息背景顏色，留空則跟隨主題預設顏色"
+      },
+      "newSessionConfirm": {
+        "label": "建立新會話時二次確認",
+        "enabled": "已開啟",
+        "disabled": "已關閉",
+        "hint": "關閉後，在已有訊息的會話中點選新建將直接建立，不再彈出確認視窗"
       }
     },
     "providers": "供應商管理",
@@ -230,13 +310,32 @@
     "mcpDesc": "配置和管理 Model Context Protocol 伺服器",
     "permissions": "權限配置",
     "permissionsDesc": "管理 Claude Code 的檔案存取和操作權限",
+    "promptEnhancer": {
+      "title": "增強提示詞",
+      "description": "設定增強提示詞功能使用的 provider 與模型，在訊息送出前先重寫並增強輸入內容。"
+    },
     "commit": {
       "title": "Commit AI",
       "description": "Configure AI-generated Git commit message behavior",
+      "providerModel": {
+        "label": "Commit 生成 Provider",
+        "modelLabel": "Commit 生成模型",
+        "resetToDefault": "恢復預設",
+        "providerAvailable": "可用",
+        "providerUnavailable": "當前不可用",
+        "currentProviderAuto": "當前使用自動選擇：{{provider}}",
+        "currentProviderManual": "當前使用手動選擇的 provider：{{provider}}",
+        "currentProviderUnavailable": "當前所選 provider 不可用：{{provider}}"
+      },
       "prompt": {
         "label": "Additional Prompt",
         "placeholder": "Add your extra requirements here, e.g., generate commit in English, include issue number, etc...",
         "hint": "The plugin has built-in CCG Commits specification prompts. Content you add here will be used as additional requirements, and AI will prioritize your instructions."
+      },
+      "projectPrompt": {
+        "label": "專案級附加提示詞",
+        "placeholder": "在此新增當前專案的專屬要求，例如：scope 必須使用模組名、commit body 需包含影響範圍等...",
+        "hint": "此提示詞僅對當前專案生效，與全域附加提示詞同時拼接。當兩者內容矛盾時，以專案提示詞為準。不同專案可獨立配置。"
       },
       "codeReview": {
         "comingSoon": "Coming Soon",
@@ -292,6 +391,12 @@
           "hoursAgo": "{{count}}小時前",
           "minutesAgo": "{{count}}分鐘前"
         }
+      },
+      "aiTitleGeneration": {
+        "label": "AI 會話標題自動生成",
+        "enabled": "已開啟",
+        "disabled": "已關閉",
+        "hint": "開啟後，新會話首次回覆完成時將呼叫 Haiku 模型自動生成簡短標題；關閉後會話仍以使用者首條訊息顯示"
       }
     },
     "codexFeatureUnavailable": "Codex 暫未適配此功能，請切換到 Claude Code 使用",
@@ -476,6 +581,7 @@
         "deepseek": "DeepSeek",
         "minimax": "MiniMax",
         "xiaomi": "Xiaomi MiMo",
+        "xiaomiPlan": "Xiaomi MiMo Plan",
         "qwen": "阿里千問",
         "openrouter": "OpenRouter"
       }
@@ -514,9 +620,28 @@
         "modelIdPlaceholder": "Model ID (required, e.g., gpt-4o)",
         "modelLabelPlaceholder": "Display name (optional)",
         "modelDescPlaceholder": "Model description (optional)",
+        "cliLoginProviderName": "Codex CLI 登入",
+        "cliLoginProviderDescription": "使用 Codex CLI 的 ChatGPT 訂閱憑證登入",
+        "cliLoginAuthorizeTitle": "啟用 Codex CLI 登入",
+        "cliLoginAuthorizeMessage": "將清除您的 config.toml 並使用 Codex CLI 的 ChatGPT 訂閱憑證登入。",
+        "cliLoginAuthorizeDetail": "請確保您已透過終端執行 'codex login' 登入。當前的 config.toml 將被備份。",
+        "cliLoginDisableTitle": "停用 Codex CLI 登入",
+        "cliLoginDisableMessage": "將恢復先前的 config.toml 並切換 API Key 認證方式。",
         "modelIdRequired": "Model ID is required",
         "modelIdInvalid": "Invalid model ID format (only letters, numbers, dots, hyphens, underscores, slashes and colons allowed)",
-        "modelIdDuplicate": "Model ID already exists"
+        "modelIdDuplicate": "Model ID already exists",
+        "envVarsTitle": "Environment Variables",
+        "messageEnvLabel": "Message Environment Variables",
+        "messageEnvHint": "Custom environment variables injected into the Codex message subprocess",
+        "mcpEnvLabel": "MCP Environment Variables",
+        "mcpEnvHint": "Custom environment variables injected into the MCP tool discovery subprocess",
+        "envKeyPlaceholder": "ENV_KEY",
+        "envValuePlaceholder": "value",
+        "addEnvVar": "Add Variable",
+        "envKeyInvalid": "Invalid key name (must start with letter/underscore, alphanumeric only)",
+        "envKeyProtected": "Cannot set built-in variable: {{key}}",
+        "envKeyDuplicate": "Duplicate key: {{key}}",
+        "envValueTooLong": "變數值過長（最大 {{max}} 字元）"
       }
     },
     "agent": {
@@ -592,6 +717,16 @@
     "confirmDelete": "確認刪除",
     "deleteMessage": "確定要刪除這個會話嗎?此操作無法撤銷。",
     "deleteSession": "刪除此會話",
+    "selectMode": "多選",
+    "exitSelectMode": "退出多選",
+    "selectedSessions": "已選擇 {{count}} 個會話",
+    "selectAll": "全選",
+    "clearSelection": "清除",
+    "deleteSelected": "刪除所選",
+    "confirmDeleteSelected": "確認刪除",
+    "deleteSelectedMessage": "確定要刪除選中的 {{count}} 個會話嗎?此操作無法撤銷。",
+    "selectSession": "選擇會話",
+    "selectSessionWithTitle": "選擇 {{title}}",
     "exportSession": "匯出會話",
     "exportSuccess": "會話已匯出",
     "exportFailed": "匯出失敗",
@@ -614,6 +749,9 @@
     "cancelEditButton": "取消",
     "titleTooLong": "標題過長（最多50個字元）",
     "titleUpdated": "標題已更新",
+    "copySessionId": "複製會話ID用於CLI恢復",
+    "sessionIdCopied": "會話ID已複製",
+    "copyFailed": "複製失敗",
     "timeAgo": {
       "yearsAgo": "年前",
       "monthsAgo": "個月前",
@@ -641,7 +779,8 @@
       "WebSearch": "網頁搜尋",
       "WebFetch": "獲取網頁",
       "execute": "執行 {{toolName}}",
-      "readDirectory": "讀取目錄"
+      "readDirectory": "讀取目錄",
+      "timeoutWarning": "請儘快回答，對話框將在 {{seconds}} 秒後自動關閉"
     }
   },
   "askUserQuestion": {
@@ -697,6 +836,50 @@
     "clickToCopy": "點選複製",
     "switch": "切換",
     "switchProvider": "切換供應商",
+    "runtimeProvider": {
+      "title": "切換當前供應商",
+      "loading": "正在載入供應商...",
+      "empty": "暫無可用供應商",
+      "switched": "已切換到 {{provider}}"
+    },
+    "nodeProcesses": {
+      "title": "Node 進程管理",
+      "badge": "{{total}} 個進程",
+      "badgeWithOrphan": "{{total}} 個 · {{orphan}} 孤立 ⚠",
+      "summary": "共 {{total}} 個 · 孤立 {{orphan}} 個",
+      "loading": "正在載入進程資訊...",
+      "empty": "目前沒有作用中的 Node 進程",
+      "refresh": "重新整理",
+      "groups": {
+        "daemon": "常駐進程",
+        "channel": "進行中對話",
+        "orphan": "孤立進程"
+      },
+      "kind": {
+        "daemonShort": "Daemon",
+        "channelShort": "對話",
+        "orphanShort": "孤立"
+      },
+      "kill": "終止",
+      "interrupt": "中斷",
+      "restart": "重啟",
+      "pending": "處理中...",
+      "killAll": "清理所有孤立進程 ({{count}})",
+      "killHint": "強制結束此 Node 進程",
+      "killAllHint": "一鍵清理所有失控的孤立進程",
+      "restartHint": "關閉常駐進程，下一則訊息時會自動重新啟動",
+      "killConfirmTitle": "終止此進程？",
+      "killConfirm": "確認終止 PID {{pid}}？當前對話可能遺失。",
+      "restartConfirmTitle": "重啟常駐進程？",
+      "restartConfirm": "確認重啟常駐進程？正在進行的對話會被中斷。",
+      "killAllConfirmTitle": "清理所有孤立進程？",
+      "killAllConfirm": "確認終止全部 {{count}} 個孤立進程？",
+      "killSuccess": "進程已終止",
+      "killAllSuccess": "已清理 {{count}} 個孤立進程",
+      "restartSuccess": "常駐進程已關閉，下一則訊息會自動啟動新實例",
+      "killFailed": "終止失敗：{{error}}",
+      "activeRequests": "{{count}} 個進行中"
+    },
     "link": "連結"
   },
   "markdown": {
@@ -1124,37 +1307,63 @@
         "description": "Sonnet 4.6 · 預設推薦模型"
       },
       "opus46": {
-        "label": "Opus 4.6",
-        "description": "Opus 4.6 · 最新最強大的模型"
+        "label": "Opus 4.7",
+        "description": "Opus 4.7 · 上一代旗艦模型"
       },
       "opus46_1m": {
-        "label": "Opus (1M 上下文)",
-        "description": "Opus 4.6 長對話模式"
+        "label": "Opus 4.6",
+        "description": "Opus 4.6 · 高效能推理模型"
       },
       "haiku45": {
         "label": "Haiku 4.5",
         "description": "Haiku 4.5 · 速度最快，適合快速回覆"
+      },
+      "opus48": {
+        "label": "Opus 4.8",
+        "description": "Opus 4.8 · 最新最強大的模型"
       }
+    },
+    "longContext": {
+      "label": "1M",
+      "shortLabel": "1M上下文",
+      "tooltipEnabled": "開啟/關閉1M上下文",
+      "tooltipDisabled": "Haiku不支援1M上下文"
     },
     "codex": {
       "gpt53codex": {
-        "label": "gpt-5.3-codex",
+        "label": "GPT-5.3-Codex",
         "description": "最新前沿智慧編程模型，能力全面增強"
       },
+      "gpt55": {
+        "label": "GPT-5.5",
+        "description": "最新前沿模型，能力進一步增強"
+      },
       "gpt54": {
-        "label": "gpt-5.4",
+        "label": "GPT-5.4",
         "description": "最新前沿模型，能力進一步增強"
       },
       "gpt52codex": {
-        "label": "gpt-5.2-codex",
-        "description": "最新前沿智慧編程模型"
+        "label": "GPT-5.2-Codex",
+        "description": "前沿智慧編程模型"
       },
       "gpt51codexMax": {
-        "label": "gpt-5.1-codex-max",
+        "label": "GPT-5.1-Codex-Max",
         "description": "針對Codex優化的旗艦模型，深度與快速推理兼備"
       },
+      "gpt54mini": {
+        "label": "GPT-5.4-Mini",
+        "description": "更輕量的前沿智慧編程模型"
+      },
+      "gpt53codexSpark": {
+        "label": "GPT-5.3-Codex-Spark",
+        "description": "超高速編程模型"
+      },
+      "gpt52": {
+        "label": "GPT-5.2",
+        "description": "針對專業工作與長程代理任務優化"
+      },
       "gpt51codexMini": {
-        "label": "gpt-5.1-codex-mini",
+        "label": "GPT-5.1-Codex-Mini",
         "description": "針對Codex優化。更便宜、更快，但性能較差"
       }
     }
@@ -1208,7 +1417,7 @@
       "label": "Claude Code"
     },
     "codex": {
-      "label": "Codex Cli"
+      "label": "Codex"
     },
     "gemini": {
       "label": "Gemini Cli"
@@ -1334,7 +1543,51 @@
   },
   "error": {
     "providerNotConfigured": "供應商未設定",
-    "providerNotConfiguredDesc": "尚未設定 AI 供應商，請先在供應商設定中新增 API Key 才能開始對話。",
-    "goToProviderSettings": "前往供應商設定"
+    "providerNotConfiguredDesc": "尚未設定 AI 供應商或未授權使用本機設定，請先在供應商管理設定中完成設定後再開始對話。",
+    "goToProviderSettings": "前往設定"
+  },
+  "errorDiagnostic": {
+    "copyCommand": "複製",
+    "copied": "已複製",
+    "openDependencySettings": "開啟相依性管理",
+    "recommended": "推薦",
+    "codexThreadResume": {
+      "title": "工作階段執行緒已失效",
+      "intro": "新建工作階段即可解決此問題。目前工作階段的執行緒 ID 在 Codex 伺服器端已不存在。",
+      "reason": "Codex 服務端會在一段時間後清除舊執行緒，繼續上一次工作階段時可能觸發此錯誤。"
+    },
+    "sdkNativeBinaryMissing": {
+      "title": "SDK 安裝不完整 — 缺少 native 二進位檔",
+      "intro": "這是淘寶 npm 鏡像源的已知問題（非外掛 bug）。鏡像源未完整同步 platform 檔案。可手動按以下方案處理：",
+      "reason": "淘寶源同步完成後此問題會自動消失，無需擔心。",
+      "solutions": {
+        "switchRegistry": {
+          "title": "方案一：暫時切換官方源重新安裝",
+          "step0": "1. 在終端機執行（切換到 npm 官方源）：",
+          "step1": "2. 開啟外掛設定中的「相依性管理」，點選重新安裝：",
+          "step2": "3. 重新安裝完成後，切回淘寶源："
+        },
+        "downgrade": {
+          "title": "方案二：版本回退",
+          "step0": "在「相依性管理」中將 SDK 版本切換到 v0.2.112 或更早版本，切換後需要重新啟動 IDEA。"
+        }
+      }
+    },
+    "spawnEbusy": {
+      "title": "spawn EBUSY — 子處理程序啟動失敗",
+      "intro": "此錯誤通常由 Node.js 版本不相容或 SDK 安裝不完整引起，按以下兩個方向排查通常可解決：",
+      "reason": "EBUSY 是 Node.js 啟動子處理程序時遇到資源忙碌的系統錯誤。常見原因：Node.js 24 相容性問題、SDK 版本過舊，或使用淘寶源安裝時同步不完整。",
+      "solutions": {
+        "checkNodeVersion": {
+          "title": "方案一：檢查 Node.js 版本",
+          "step0": "在終端機執行以下指令查看版本號。建議使用 Node 22 或目前最新 LTS 版本 — 使用者反饋 Node 24 報錯較多，請優先使用 20 或 22："
+        },
+        "reinstallLatestSdk": {
+          "title": "方案二：用 npm 官方源重新安裝最新版 SDK",
+          "step0": "1. 切換到 npm 官方源（淘寶源可能未同步最新版本，請勿使用淘寶源安裝）：",
+          "step1": "2. 開啟「相依性管理」重新安裝最新版 SDK："
+        }
+      }
+    }
   }
 }

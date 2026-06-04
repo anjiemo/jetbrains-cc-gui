@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Sends Claude requests through the long-running daemon.
@@ -48,13 +50,16 @@ class ClaudeDaemonRequestExecutor {
             String agentPrompt,
             Boolean streaming,
             Boolean disableThinking,
+            String reasoningEffort,
             MessageCallback callback
     ) {
         return CompletableFuture.supplyAsync(() -> {
             SDKResult result = new SDKResult();
             StringBuilder assistantContent = new StringBuilder();
-            boolean[] hadSendError = {false};
-            String[] lastNodeError = {null};
+            AtomicBoolean hadSendError = new AtomicBoolean(false);
+            AtomicReference<String> lastNodeError = new AtomicReference<>(null);
+            AtomicBoolean wasAborted = new AtomicBoolean(false);
+            long startTime = System.currentTimeMillis();
 
             try {
                 JsonObject params = requestParamsBuilder.buildSendParams(
@@ -68,7 +73,8 @@ class ClaudeDaemonRequestExecutor {
                         openedFiles,
                         agentPrompt,
                         streaming,
-                        disableThinking
+                        disableThinking,
+                        reasoningEffort
                 );
 
                 boolean hasAttachments = attachments != null && !attachments.isEmpty() && params.has("attachments");
@@ -89,7 +95,7 @@ class ClaudeDaemonRequestExecutor {
                                         || line.startsWith("[STARTUP_ERROR]")
                                         || line.startsWith("[ERROR]")) {
                                     log.warn("[Node.js ERROR] " + line);
-                                    lastNodeError[0] = line;
+                                    lastNodeError.set(line);
                                 }
                                 streamAdapter.processOutputLine(
                                         line,
@@ -97,7 +103,8 @@ class ClaudeDaemonRequestExecutor {
                                         result,
                                         assistantContent,
                                         hadSendError,
-                                        lastNodeError
+                                        lastNodeError,
+                                        wasAborted
                                 );
                             }
 
@@ -110,7 +117,8 @@ class ClaudeDaemonRequestExecutor {
                                             result,
                                             assistantContent,
                                             hadSendError,
-                                            lastNodeError
+                                            lastNodeError,
+                                            wasAborted
                                     );
                                     return;
                                 }
@@ -119,10 +127,15 @@ class ClaudeDaemonRequestExecutor {
 
                             @Override
                             public void onError(String error) {
-                                if (!hadSendError[0]) {
+                                if (!hadSendError.get()) {
                                     result.success = false;
                                     result.error = error;
                                 }
+                            }
+
+                            @Override
+                            public void onAbort() {
+                                wasAborted.set(true);
                             }
 
                             @Override
@@ -154,14 +167,24 @@ class ClaudeDaemonRequestExecutor {
                 result.finalResult = assistantContent.toString();
                 result.messageCount = result.messages.size();
 
-                if (!hadSendError[0]) {
+                if (!hadSendError.get()) {
                     result.success = success != null && success;
                     if (result.success) {
                         callback.onComplete(result);
+                    } else if (wasAborted.get()) {
+                        // User manually aborted — treat as graceful completion, not an error.
+                        // This matches how Codex handles interruptions (callback.onComplete with
+                        // success=false instead of callback.onError), so the UI does not show
+                        // an error message or toast notification.
+                        long elapsed = System.currentTimeMillis() - startTime;
+                        log.info("[DaemonExecutor] Request was aborted by user (elapsed: " + elapsed + "ms)");
+                        result.error = "User interrupted";
+                        callback.onComplete(result);
                     } else {
                         String errorMsg = "Daemon command failed";
-                        if (lastNodeError[0] != null) {
-                            errorMsg += "\n\nDetails: " + lastNodeError[0];
+                        String nodeErr = lastNodeError.get();
+                        if (nodeErr != null) {
+                            errorMsg += "\n\nDetails: " + nodeErr;
                         }
                         if (result.error == null) {
                             result.error = errorMsg;
@@ -172,7 +195,16 @@ class ClaudeDaemonRequestExecutor {
 
                 return result;
             } catch (Exception e) {
-                if (!hadSendError[0]) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                if (wasAborted.get()) {
+                    // Abort arrived but future was already completed exceptionally by the
+                    // daemon's error output before sendAbort() could complete it normally.
+                    // Treat as graceful interruption, same as the wasAborted branch above.
+                    log.info("[DaemonExecutor] Request was aborted by user (caught exception, elapsed: " + elapsed + "ms)");
+                    result.success = false;
+                    result.error = "User interrupted";
+                    callback.onComplete(result);
+                } else if (!hadSendError.get()) {
                     result.success = false;
                     result.error = "Daemon request failed: " + outputExtractor.extractErrorMessage(e);
                     callback.onError(result.error);

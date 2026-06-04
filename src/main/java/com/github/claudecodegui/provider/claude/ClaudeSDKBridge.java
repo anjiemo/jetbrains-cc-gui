@@ -13,6 +13,9 @@ import java.io.File;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Claude Agent SDK bridge.
@@ -54,7 +57,7 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
                 envConfigurator, jsonOutputExtractor
         );
         this.sessionQueryService = new ClaudeSessionQueryService(
-                LOG, gson, nodeDetector, sdkDirSupplier,
+                LOG, gson, nodeDetector, sdkDirSupplier, processManager,
                 envConfigurator, jsonOutputExtractor
         );
         this.mcpQueryService = new ClaudeMcpQueryService(
@@ -71,10 +74,35 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
     }
 
     /**
+     * Register a listener for custom daemon events (e.g., AI title generation).
+     * Multiple listeners may coexist; callers MUST pair this with
+     * {@link #removeDaemonEventListener} on disposal to avoid leaks.
+     */
+    public void addDaemonEventListener(DaemonBridge.DaemonEventListener listener) {
+        this.daemonCoordinator.addDaemonEventListener(listener);
+    }
+
+    /**
+     * Unregister a previously added daemon event listener.
+     */
+    public void removeDaemonEventListener(DaemonBridge.DaemonEventListener listener) {
+        this.daemonCoordinator.removeDaemonEventListener(listener);
+    }
+
+    /**
      * Shut down the daemon process.
      */
     public void shutdownDaemon() {
         daemonCoordinator.shutdownDaemon();
+    }
+
+    /**
+     * Returns the currently active daemon bridge (or null if no daemon is running).
+     * Read-only access for the Node process management panel — do not start/stop
+     * via this reference; use shutdownDaemon() or sendCommand() through the bridge instead.
+     */
+    public DaemonBridge getCurrentDaemonBridgeForInspection() {
+        return daemonCoordinator.getCurrentDaemonBridge();
     }
 
     public void prewarmDaemonAsync(String cwd) {
@@ -85,7 +113,19 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
      * Prewarm daemon asynchronously to reduce first-message latency.
      */
     public void prewarmDaemonAsync(String cwd, String runtimeSessionEpoch) {
-        daemonCoordinator.prewarmDaemonAsync(cwd, runtimeSessionEpoch);
+        daemonCoordinator.prewarmDaemonAsync(cwd, runtimeSessionEpoch, null);
+    }
+
+    /**
+     * Prewarm daemon asynchronously for a specific session.
+     * Creates a runtime that loads the session's context via --resume.
+     *
+     * @param cwd Working directory
+     * @param runtimeSessionEpoch Session epoch for cache invalidation
+     * @param sessionId The historical session ID to resume
+     */
+    public void prewarmDaemonAsync(String cwd, String runtimeSessionEpoch, String sessionId) {
+        daemonCoordinator.prewarmDaemonAsync(cwd, runtimeSessionEpoch, sessionId);
     }
 
     public void resetPersistentRuntime(String runtimeSessionEpoch) {
@@ -137,8 +177,8 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
             MessageCallback callback,
             SDKResult result,
             StringBuilder assistantContent,
-            boolean[] hadSendError,
-            String[] lastNodeError
+            AtomicBoolean hadSendError,
+            AtomicReference<String> lastNodeError
     ) {
         if (line.startsWith("[STDIN_ERROR]")
                 || line.startsWith("[STDIN_PARSE_ERROR]")
@@ -339,12 +379,35 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
             Boolean disableThinking,
             MessageCallback callback
     ) {
+        return sendMessage(channelId, message, sessionId, runtimeSessionEpoch, cwd, attachments, permissionMode,
+                model, openedFiles, agentPrompt, streaming, disableThinking, null, callback);
+    }
+
+    /**
+     * Send message in existing channel (streaming response, with all options including streaming flag, disableThinking, and reasoningEffort).
+     */
+    public CompletableFuture<SDKResult> sendMessage(
+            String channelId,
+            String message,
+            String sessionId,
+            String runtimeSessionEpoch,
+            String cwd,
+            List<ClaudeSession.Attachment> attachments,
+            String permissionMode,
+            String model,
+            JsonObject openedFiles,
+            String agentPrompt,
+            Boolean streaming,
+            Boolean disableThinking,
+            String reasoningEffort,
+            MessageCallback callback
+    ) {
         // Try daemon mode first (avoids per-request Node.js process spawning)
         DaemonBridge db = daemonCoordinator.getDaemonBridge();
         if (db != null) {
             return sendMessageViaDaemon(db, channelId, message, sessionId, runtimeSessionEpoch, cwd,
                     attachments, permissionMode, model, openedFiles, agentPrompt,
-                    streaming, disableThinking, callback);
+                    streaming, disableThinking, reasoningEffort, callback);
         }
 
         // Fallback: per-process mode (spawns a new Node.js process per request)
@@ -362,6 +425,7 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
                 agentPrompt,
                 streaming,
                 disableThinking,
+                reasoningEffort,
                 callback
         );
     }
@@ -371,6 +435,10 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
      */
     public List<JsonObject> getSessionMessages(String sessionId, String cwd) {
         return sessionQueryService.getSessionMessages(sessionId, cwd);
+    }
+
+    public JsonObject getLatestClaudeUserMessage(String sessionId, String cwd) {
+        return sessionQueryService.getLatestUserMessage(sessionId, cwd);
     }
 
     /**
@@ -409,6 +477,112 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
     }
 
     // ============================================================================
+    // Context usage query
+    // ============================================================================
+
+    /**
+     * Get context window usage breakdown from the active Claude runtime.
+     * Calls the SDK's getContextUsage() API via the daemon process.
+     *
+     * @param sessionId The session ID to query context for
+     * @param cwd Working directory
+     * @param model The model ID to use for the runtime (e.g., "claude-opus-4-7")
+     * @return CompletableFuture with context usage data as JsonObject
+     */
+    public CompletableFuture<JsonObject> getContextUsage(String sessionId, String cwd, String model) {
+        DaemonBridge db = this.daemonCoordinator.getDaemonBridge();
+        if (db == null) {
+            JsonObject error = new JsonObject();
+            error.addProperty("success", false);
+            error.addProperty("error", "Daemon not available. Context usage requires daemon mode.");
+            return CompletableFuture.completedFuture(error);
+        }
+
+        JsonObject params = new JsonObject();
+        if (sessionId != null && !sessionId.isEmpty()) {
+            params.addProperty("sessionId", sessionId);
+        }
+        if (cwd != null && !cwd.isEmpty()) {
+            params.addProperty("cwd", cwd);
+        }
+        if (model != null && !model.isEmpty()) {
+            params.addProperty("model", model);
+        }
+
+        AtomicReference<JsonObject> resultRef = new AtomicReference<>();
+        CompletableFuture<JsonObject> resultFuture = new CompletableFuture<>();
+
+        DaemonBridge.DaemonOutputCallback callback = new DaemonBridge.DaemonOutputCallback() {
+            @Override
+            public void onLine(String line) {
+                try {
+                    JsonObject parsed = ClaudeSDKBridge.this.gson.fromJson(line, JsonObject.class);
+                    resultRef.set(parsed);
+                } catch (Exception ignored) {
+                }
+            }
+            @Override
+            public void onStderr(String text) { }
+            @Override
+            public void onError(String error) {
+                if (!resultFuture.isDone()) {
+                    JsonObject err = new JsonObject();
+                    err.addProperty("success", false);
+                    err.addProperty("error", error);
+                    resultFuture.complete(err);
+                }
+            }
+            @Override
+            public void onComplete(boolean success) {
+                if (!resultFuture.isDone()) {
+                    if (success) {
+                        JsonObject result = resultRef.get();
+                        if (result != null) {
+                            resultFuture.complete(result);
+                        } else {
+                            JsonObject err = new JsonObject();
+                            err.addProperty("success", false);
+                            err.addProperty("error", "No response received");
+                            resultFuture.complete(err);
+                        }
+                    } else {
+                        JsonObject err = new JsonObject();
+                        err.addProperty("success", false);
+                        err.addProperty("error", "getContextUsage command failed");
+                        resultFuture.complete(err);
+                    }
+                }
+            }
+        };
+
+        try {
+            CompletableFuture<Boolean> commandFuture = db.sendCommand("claude.getContextUsage", params, callback);
+            commandFuture.exceptionally(ex -> {
+                if (!resultFuture.isDone()) {
+                    JsonObject err = new JsonObject();
+                    err.addProperty("success", false);
+                    err.addProperty("error", ex.getMessage());
+                    resultFuture.complete(err);
+                }
+                return false;
+            });
+        } catch (Exception e) {
+            LOG.error("[ClaudeSDKBridge] getContextUsage failed: " + e.getMessage(), e);
+            JsonObject err = new JsonObject();
+            err.addProperty("success", false);
+            err.addProperty("error", e.getMessage());
+            return CompletableFuture.completedFuture(err);
+        }
+
+        return resultFuture.orTimeout(180, TimeUnit.SECONDS).exceptionally(ex -> {
+            JsonObject err = new JsonObject();
+            err.addProperty("success", false);
+            err.addProperty("error", "getContextUsage timed out after 180 seconds (SDK may be loading)");
+            return err;
+        });
+    }
+
+    // ============================================================================
     // Daemon mode message sending
     // ============================================================================
 
@@ -430,6 +604,7 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
             String agentPrompt,
             Boolean streaming,
             Boolean disableThinking,
+            String reasoningEffort,
             MessageCallback callback
     ) {
         return daemonRequestExecutor.sendMessageViaDaemon(
@@ -446,6 +621,7 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
                 agentPrompt,
                 streaming,
                 disableThinking,
+                reasoningEffort,
                 callback
         );
     }

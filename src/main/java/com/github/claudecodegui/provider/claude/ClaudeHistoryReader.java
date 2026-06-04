@@ -98,9 +98,7 @@ public class ClaudeHistoryReader {
         public String cwd;
 
         public static class Message {
-            public String id;
             public String role;
-            public String model;
             public Object content;
             public Usage usage;
         }
@@ -192,6 +190,7 @@ public class ClaudeHistoryReader {
         public int messageCount;
         public long lastTimestamp;
         public long firstTimestamp;
+        public long fileSize;
     }
 
     /**

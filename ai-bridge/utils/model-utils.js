@@ -36,30 +36,45 @@ export function mapModelIdToSdkName(modelId) {
  *
  * Priority: ANTHROPIC_MODEL (global override) > ANTHROPIC_DEFAULT_*_MODEL > original modelId
  *
- * @param {string} modelId - Internal model ID from frontend (e.g. 'claude-sonnet-4-6')
+ * IMPORTANT: The `[1m]` suffix on the input modelId is preserved across the mapping.
+ * The 1M context window is selected by the Claude Code SDK based on whether the
+ * model name ends with `[1m]` (it reads `process.env.ANTHROPIC_DEFAULT_*_MODEL`).
+ * Stripping the suffix during settings resolution silently disables the 1M toggle
+ * for any provider whose mapping value doesn't already carry `[1m]` (most third-party
+ * presets like zhipu/kimi/qwen/minimax/xiaomi). If the mapped value already ends in
+ * `[1m]`, it's kept as-is so we don't double-append.
+ *
+ * @param {string} modelId - Internal model ID from frontend (e.g. 'claude-sonnet-4-6' or 'claude-sonnet-4-6[1m]')
  * @param {object} userEnv - The env object from settings.json (settings.env)
- * @returns {string} The resolved model name for API calls
+ * @returns {string} The resolved model name for API calls, with the `[1m]` suffix preserved
  */
 export function resolveModelFromSettings(modelId, userEnv) {
   if (!modelId || !userEnv) return modelId;
 
   const lowerModel = modelId.toLowerCase();
+  const requestHas1M = /\[1m\]$/i.test(modelId);
+  // Preserve the [1m] suffix from the original modelId across settings mapping.
+  // If the mapped value already carries [1m], don't double-append it.
+  const applySuffix = (mapped) => {
+    if (!requestHas1M) return mapped;
+    return /\[1m\]$/i.test(mapped) ? mapped : `${mapped}[1m]`;
+  };
 
   // ANTHROPIC_MODEL is a global override that applies to all model types
   if (userEnv.ANTHROPIC_MODEL && String(userEnv.ANTHROPIC_MODEL).trim()) {
-    return String(userEnv.ANTHROPIC_MODEL).trim();
+    return applySuffix(String(userEnv.ANTHROPIC_MODEL).trim());
   }
 
   // Check model-specific env vars based on the internal model ID's type
   if (lowerModel.includes('opus')) {
     const mapped = userEnv.ANTHROPIC_DEFAULT_OPUS_MODEL;
     if (mapped && String(mapped).trim()) {
-      return String(mapped).trim();
+      return applySuffix(String(mapped).trim());
     }
   } else if (lowerModel.includes('haiku')) {
     const mapped = userEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL;
     if (mapped && String(mapped).trim()) {
-      return String(mapped).trim();
+      return applySuffix(String(mapped).trim());
     }
   } else if (lowerModel.includes('sonnet')) {
     // Only apply sonnet mapping when the model ID actually contains 'sonnet'.
@@ -67,7 +82,7 @@ export function resolveModelFromSettings(modelId, userEnv) {
     // remapped to the sonnet setting, as they are already the intended model name.
     const mapped = userEnv.ANTHROPIC_DEFAULT_SONNET_MODEL;
     if (mapped && String(mapped).trim()) {
-      return String(mapped).trim();
+      return applySuffix(String(mapped).trim());
     }
   }
   // For non-Anthropic model IDs that don't contain 'opus'/'haiku'/'sonnet',
@@ -101,6 +116,8 @@ export function setModelEnvironmentVariables(modelId, baseModelId) {
   // that doesn't contain 'opus'/'haiku'/'sonnet'.
   const lowerBase = (baseModelId || modelId).toLowerCase();
 
+  process.env.ANTHROPIC_MODEL = modelId;
+
   // Set the corresponding environment variable based on model type
   // so the SDK knows which specific version to use
   if (lowerBase.includes('opus')) {
@@ -116,6 +133,37 @@ export function setModelEnvironmentVariables(modelId, baseModelId) {
     process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = modelId;
     console.log('[MODEL_ENV] Set ANTHROPIC_DEFAULT_SONNET_MODEL =', modelId);
   }
+}
+
+/**
+ * Determine whether the model natively supports Anthropic vision content blocks.
+ *
+ * Different models have different vision input capabilities:
+ * - Claude models (claude-*): Support Anthropic's standard vision format
+ *   via {type: "image", source: {type: "base64", media_type, data}}.
+ * - Third-party models (mimo, deepseek, qwen, glm, etc.): Many do not properly
+ *   handle Anthropic vision content blocks, especially when routed through
+ *   third-party Anthropic-compatible proxies. The image blocks may be silently
+ *   dropped during proxy translation, causing the model to report "no image attached".
+ *
+ * For non-Claude models, the caller should fall back to saving images as temp
+ * files and referencing them in the message text, mimicking Claude Code CLI
+ * behavior which uses the Read tool to load images from disk.
+ *
+ * @param {string} modelId - The resolved model name actually sent to the API.
+ *                            Examples: "claude-sonnet-4-5", "mimo-v2.5-pro", "MiniMax-M2.5"
+ * @returns {boolean} True if the model natively supports Anthropic vision blocks.
+ */
+export function modelSupportsVision(modelId) {
+  if (!modelId || typeof modelId !== 'string') {
+    return true;
+  }
+  const lower = modelId.toLowerCase();
+  // Anchor to the canonical "claude-" prefix to avoid matching third-party
+  // model names that merely contain the substring "claude" (e.g.
+  // "claude-compatible-proxy"), which historically yielded false positives
+  // and dropped images for proxies that don't speak Anthropic vision blocks.
+  return lower.startsWith('claude-');
 }
 
 // Note: getClaudeCliPath() has been removed.

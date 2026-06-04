@@ -23,7 +23,8 @@ export function buildRuntimeSignature(options, systemPromptAppend, streamingEnab
     systemPromptAppend: systemPromptAppend || '',
     streamingEnabled: !!streamingEnabled,
     runtimeSessionEpoch: runtimeSessionEpoch || '',
-    model: options.model || ''
+    model: options.model || '',
+    effort: options.effort || ''
   };
   return JSON.stringify(material);
 }
@@ -85,6 +86,7 @@ async function createRuntime(requestContext, callbacks) {
     runtimeSessionEpoch: requestContext.runtimeSessionEpoch || null,
     runtimeSignature: requestContext.runtimeSignature,
     currentModel: requestContext.sdkModelName || null,
+    modelId: requestContext.modelId || null, // Original model ID, may contain [1m] suffix
     currentPermissionMode: initialPermissionMode,
     permissionModeState: { value: initialPermissionMode },
     currentMaxThinkingTokens: requestContext.maxThinkingTokens ?? null,
@@ -93,7 +95,8 @@ async function createRuntime(requestContext, callbacks) {
     activeTurnCount: 0,
     stderrLines: [],
     query: null,
-    inputStream: new AsyncStream()
+    inputStream: new AsyncStream(),
+    titleGenerationAttempted: false
   };
 
   const options = {
@@ -115,7 +118,22 @@ async function createRuntime(requestContext, callbacks) {
   options.hooks = {
     ...(options.hooks || {}),
     PreToolUse: [{
-      hooks: [createPreToolUseHook(runtime.permissionModeState)]
+      hooks: [createPreToolUseHook(runtime.permissionModeState, options.cwd, async (mode) => {
+        if (runtime.currentPermissionMode === mode) {
+          runtime.permissionModeState.value = mode;
+          return;
+        }
+        if (typeof runtime.query?.setPermissionMode === 'function') {
+          try {
+            await runtime.query.setPermissionMode(mode);
+          } catch (error) {
+            console.warn('[LIFECYCLE] hook setPermissionMode failed, updating local state only:', error.message);
+          }
+        }
+        // Always update local state to keep hook and runtime in sync
+        runtime.currentPermissionMode = mode;
+        runtime.permissionModeState.value = mode;
+      })]
     }]
   };
 
@@ -235,4 +253,4 @@ export async function cleanupStaleSessionRuntimes(callbacks) {
   return cleanupSessionsFromRegistry((runtime) => disposeRuntime(runtime, callbacks));
 }
 
-export { beginRuntimeTurn, endRuntimeTurn, touchRuntime };
+export { beginRuntimeTurn, endRuntimeTurn, touchRuntime, applyDynamicControls };

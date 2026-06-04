@@ -8,7 +8,6 @@ import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
-import com.intellij.openapi.project.Project;
 
 import javax.swing.*;
 import java.util.List;
@@ -97,6 +96,10 @@ public class McpServerHandler extends BaseMessageHandler {
             });
         } catch (Exception e) {
             LOG.error("[McpServerHandler] Failed to get MCP servers: " + e.getMessage(), e);
+            // Send empty array so frontend exits loading state instead of hanging
+            ApplicationManager.getApplication().invokeLater(() -> {
+                callJavaScript("window.updateMcpServers", escapeJs("[]"));
+            });
         }
     }
 
@@ -311,7 +314,9 @@ public class McpServerHandler extends BaseMessageHandler {
                 });
             } else {
                 ApplicationManager.getApplication().invokeLater(() -> {
-                    String errorMsg = escapeJs(com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("mcp.deleteServerFailedWithReason", com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("mcp.serverNotFound")));
+                    String reason = com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("mcp.serverNotFound");
+                    String errorMsg = escapeJs(com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message(
+                            "mcp.deleteServerFailedWithReason", reason));
                     callJavaScript("window.showError", errorMsg);
                 });
             }

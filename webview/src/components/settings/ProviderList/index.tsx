@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ProviderConfig } from '../../../types/provider';
+import { SPECIAL_PROVIDER_IDS } from '../../../types/provider';
 import { sendToJava } from '../../../utils/bridge';
 import { useDragSort } from '../hooks/useDragSort';
 import ImportConfirmDialog from './ImportConfirmDialog';
 import styles from './style.module.less';
+
+const ICON_MR_8_STYLE: React.CSSProperties = { marginRight: '8px' };
+const CLI_ACCOUNT_INFO_STYLE: React.CSSProperties = { marginTop: '4px', opacity: 0.8 };
 
 interface ProviderListProps {
   providers: ProviderConfig[];
@@ -26,9 +30,6 @@ export default function ProviderList({
   emptyState,
 }: ProviderListProps) {
   const { t } = useTranslation();
-  const LOCAL_PROVIDER_ID = '__local_settings_json__';
-  const CLI_LOGIN_PROVIDER_ID = '__cli_login__';
-  const DISABLED_PROVIDER_ID = '__disabled__';
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importPreviewData, setImportPreviewData] = useState<any[]>([]);
@@ -51,6 +52,7 @@ export default function ProviderList({
     localItems: localProviders,
     draggedId: draggedProviderId,
     dragOverId: dragOverProviderId,
+    handlePointerDown,
     handleDragStart,
     handleDragOver,
     handleDragLeave,
@@ -59,7 +61,7 @@ export default function ProviderList({
   } = useDragSort({
     items: providers,
     onSort,
-    pinnedIds: [LOCAL_PROVIDER_ID, CLI_LOGIN_PROVIDER_ID],
+    pinnedIds: [SPECIAL_PROVIDER_IDS.LOCAL_SETTINGS, SPECIAL_PROVIDER_IDS.CLI_LOGIN],
   });
 
   useEffect(() => {
@@ -70,15 +72,15 @@ export default function ProviderList({
     };
 
     // Register CLI login account info callback
-    (window as any).updateCliLoginAccountInfo = (email: string) => {
+    window.updateCliLoginAccountInfo = (email: string) => {
       if (mountedRef.current) {
         setCliLoginAccountEmail(email);
       }
     };
 
     // Register global callback functions for Java invocation
-    (window as any).import_preview_result = (dataOrStr: any) => {
-        let data = dataOrStr;
+    window.import_preview_result = (dataOrStr) => {
+        let data: unknown = dataOrStr;
         if (typeof data === 'string') {
             try {
                 data = JSON.parse(data);
@@ -90,7 +92,7 @@ export default function ProviderList({
         window.dispatchEvent(event);
     };
 
-    (window as any).backend_notification = (...args: any[]) => {
+    window.backend_notification = (...args: unknown[]) => {
         let data: any = {};
         
         // Support multi-argument invocation (type, title, message) to avoid JSON parsing issues
@@ -145,9 +147,9 @@ export default function ProviderList({
       window.removeEventListener('backend_notification', handleBackendNotification as EventListener);
       
       // Clean up global functions
-      delete (window as any).updateCliLoginAccountInfo;
-      delete (window as any).import_preview_result;
-      delete (window as any).backend_notification;
+      delete window.updateCliLoginAccountInfo;
+      delete window.import_preview_result;
+      delete window.backend_notification;
     };
   }, [addToast]);
 
@@ -330,7 +332,7 @@ export default function ProviderList({
                 className={styles.btnPrimary}
                 onClick={() => {
                   setShowLocalProviderConfirm(false);
-                  onSwitch(LOCAL_PROVIDER_ID);
+                  onSwitch(SPECIAL_PROVIDER_IDS.LOCAL_SETTINGS);
                 }}
               >
                 {t('settings.provider.authorizeAndEnable')}
@@ -361,7 +363,7 @@ export default function ProviderList({
                 className={styles.btnDanger}
                 onClick={() => {
                   setShowLocalProviderDisableConfirm(false);
-                  onSwitch(DISABLED_PROVIDER_ID);
+                  onSwitch(SPECIAL_PROVIDER_IDS.DISABLED);
                 }}
               >
                 {t('settings.provider.revokeAuthorization')}
@@ -395,7 +397,7 @@ export default function ProviderList({
                 className={styles.btnPrimary}
                 onClick={() => {
                   setShowCliLoginConfirm(false);
-                  onSwitch(CLI_LOGIN_PROVIDER_ID);
+                  onSwitch(SPECIAL_PROVIDER_IDS.CLI_LOGIN);
                 }}
               >
                 {t('settings.provider.authorizeAndEnable')}
@@ -427,7 +429,7 @@ export default function ProviderList({
                 onClick={() => {
                   setShowCliLoginDisableConfirm(false);
                   setCliLoginAccountEmail(null);
-                  onSwitch(DISABLED_PROVIDER_ID);
+                  onSwitch(SPECIAL_PROVIDER_IDS.DISABLED);
                 }}
               >
                 {t('settings.provider.revokeAuthorization')}
@@ -507,12 +509,12 @@ export default function ProviderList({
       <div className={styles.list}>
         <>
           <div
-            key={LOCAL_PROVIDER_ID}
-            className={`${styles.card} ${localProviders.some(p => p.id === LOCAL_PROVIDER_ID && p.isActive) ? styles.active : ''} ${styles.localProviderCard}`}
+            key={SPECIAL_PROVIDER_IDS.LOCAL_SETTINGS}
+            className={`${styles.card} ${localProviders.some(p => p.id === SPECIAL_PROVIDER_IDS.LOCAL_SETTINGS && p.isActive) ? styles.active : ''} ${styles.localProviderCard}`}
           >
             <div className={styles.cardInfo}>
               <div className={styles.name}>
-                <span className="codicon codicon-file" style={{ marginRight: '8px' }} />
+                <span className="codicon codicon-file" style={ICON_MR_8_STYLE} />
                 {t('settings.provider.localProviderName')}
               </div>
               <div className={styles.website} title={t('settings.provider.localProviderDescription')}>
@@ -521,7 +523,7 @@ export default function ProviderList({
             </div>
 
             <div className={styles.cardActions}>
-              {localProviders.some(p => p.id === LOCAL_PROVIDER_ID && p.isActive) ? (
+              {localProviders.some(p => p.id === SPECIAL_PROVIDER_IDS.LOCAL_SETTINGS && p.isActive) ? (
                 <button
                   className={styles.revokeButton}
                   onClick={() => setShowLocalProviderDisableConfirm(true)}
@@ -542,26 +544,26 @@ export default function ProviderList({
           </div>
 
           <div
-            key={CLI_LOGIN_PROVIDER_ID}
-            className={`${styles.card} ${localProviders.some(p => p.id === CLI_LOGIN_PROVIDER_ID && p.isActive) ? styles.active : ''} ${styles.localProviderCard}`}
+            key={SPECIAL_PROVIDER_IDS.CLI_LOGIN}
+            className={`${styles.card} ${localProviders.some(p => p.id === SPECIAL_PROVIDER_IDS.CLI_LOGIN && p.isActive) ? styles.active : ''} ${styles.localProviderCard}`}
           >
             <div className={styles.cardInfo}>
               <div className={styles.name}>
-                <span className="codicon codicon-key" style={{ marginRight: '8px' }} />
+                <span className="codicon codicon-key" style={ICON_MR_8_STYLE} />
                 {t('settings.provider.cliLoginProviderName')}
               </div>
               <div className={styles.website} title={t('settings.provider.cliLoginProviderDescription')}>
                 {t('settings.provider.cliLoginProviderDescription')}
               </div>
-              {cliLoginAccountEmail && localProviders.some(p => p.id === CLI_LOGIN_PROVIDER_ID && p.isActive) && (
-                <div className={styles.website} style={{ marginTop: '4px', opacity: 0.8 }}>
+              {cliLoginAccountEmail && localProviders.some(p => p.id === SPECIAL_PROVIDER_IDS.CLI_LOGIN && p.isActive) && (
+                <div className={styles.website} style={CLI_ACCOUNT_INFO_STYLE}>
                   {t('settings.provider.cliLoginAccountInfo', { email: cliLoginAccountEmail })}
                 </div>
               )}
             </div>
 
             <div className={styles.cardActions}>
-              {localProviders.some(p => p.id === CLI_LOGIN_PROVIDER_ID && p.isActive) ? (
+              {localProviders.some(p => p.id === SPECIAL_PROVIDER_IDS.CLI_LOGIN && p.isActive) ? (
                 <button
                   className={styles.revokeButton}
                   onClick={() => setShowCliLoginDisableConfirm(true)}
@@ -582,7 +584,7 @@ export default function ProviderList({
           </div>
 
           {(() => {
-            const regularProviders = localProviders.filter(p => p.id !== LOCAL_PROVIDER_ID && p.id !== CLI_LOGIN_PROVIDER_ID);
+            const regularProviders = localProviders.filter(p => p.id !== SPECIAL_PROVIDER_IDS.LOCAL_SETTINGS && p.id !== SPECIAL_PROVIDER_IDS.CLI_LOGIN);
             return regularProviders.length > 0 ? (
               regularProviders.map((provider) => (
             <div
@@ -593,6 +595,7 @@ export default function ProviderList({
                 draggedProviderId === provider.id && styles.dragging,
                 dragOverProviderId === provider.id && styles.dragOver,
               ].filter(Boolean).join(' ')}
+              data-drag-sort-id={provider.id}
               draggable={true}
               onDragStart={(e) => handleDragStart(e, provider.id)}
               onDragOver={(e) => handleDragOver(e, provider.id)}
@@ -600,7 +603,11 @@ export default function ProviderList({
               onDrop={(e) => handleDrop(e, provider.id)}
               onDragEnd={handleDragEnd}
             >
-              <div className={styles.dragHandle} title={t('settings.provider.dragToSort')}>
+              <div
+                className={styles.dragHandle}
+                title={t('settings.provider.dragToSort')}
+                onPointerDown={(e) => handlePointerDown(e, provider.id, e.currentTarget.closest<HTMLElement>('[data-drag-sort-id]'))}
+              >
                 <span className="codicon codicon-gripper" />
               </div>
               <div className={styles.cardInfo}>
@@ -676,7 +683,7 @@ export default function ProviderList({
           })()}
 
           {(() => {
-            const regularProviders = localProviders.filter(p => p.id !== LOCAL_PROVIDER_ID);
+            const regularProviders = localProviders.filter(p => p.id !== SPECIAL_PROVIDER_IDS.LOCAL_SETTINGS);
             return regularProviders.length === 0 && emptyState ? (
               <div className={styles.emptyState}>
                 {emptyState}

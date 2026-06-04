@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.github.claudecodegui.util.UserMessageSanitizer;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -44,6 +45,21 @@ public class CodexMessageConverter {
 
     private CodexMessageConverter() {
         // Utility class, no instantiation.
+    }
+
+    /**
+     * Safely extract a string from a JsonElement, handling null, primitives, and structured types.
+     * Returns the primitive string value when possible, falls back to {@code toString()} for
+     * arrays/objects, and returns the given default for null or missing elements.
+     */
+    private static String safeGetAsString(JsonElement elem, String defaultValue) {
+        if (elem == null || elem.isJsonNull()) {
+            return defaultValue;
+        }
+        if (elem.isJsonPrimitive()) {
+            return elem.getAsString();
+        }
+        return elem.toString();
     }
 
     /**
@@ -240,6 +256,21 @@ public class CodexMessageConverter {
      */
     public static JsonObject convertCodexMessageToFrontend(JsonObject payload, String timestamp) {
         String contentStr = extractContentAsString(payload.get("content"));
+        String role = payload.has("role") ? payload.get("role").getAsString() : "user";
+        if (!"user".equals(role) && !"assistant".equals(role)) {
+            return null;
+        }
+        boolean userMessage = "user".equals(role);
+        boolean strippedSystemTags = false;
+
+        if (userMessage) {
+            String originalContent = contentStr;
+            contentStr = stripSystemTags(originalContent);
+            strippedSystemTags = originalContent != null && !originalContent.equals(contentStr);
+            if (contentStr == null || contentStr.isBlank()) {
+                return null;
+            }
+        }
 
         // Filter out system messages
         if (contentStr != null && isSystemMessage(contentStr)) {
@@ -247,7 +278,6 @@ public class CodexMessageConverter {
         }
 
         JsonObject frontendMsg = new JsonObject();
-        String role = payload.has("role") ? payload.get("role").getAsString() : "user";
         frontendMsg.addProperty("type", role);
 
         if (payload.has("content")) {
@@ -255,7 +285,9 @@ public class CodexMessageConverter {
                 frontendMsg.addProperty("content", contentStr);
             }
 
-            JsonArray claudeContentBlocks = convertToClaudeContentBlocks(payload.get("content"));
+            JsonArray claudeContentBlocks = strippedSystemTags
+                    ? textContentBlocks(contentStr)
+                    : convertToClaudeContentBlocks(payload.get("content"));
             JsonObject rawObj = new JsonObject();
             rawObj.add("content", claudeContentBlocks);
             rawObj.addProperty("role", role);
@@ -277,8 +309,26 @@ public class CodexMessageConverter {
                contentStr.startsWith("Tool result:") ||
                contentStr.startsWith("Exit code:") ||
                contentStr.startsWith("# AGENTS.md instructions") ||
+               contentStr.startsWith("<agents-instructions>") ||
                contentStr.startsWith("<INSTRUCTIONS>") ||
                contentStr.startsWith("<environment_context>");
+    }
+
+    /**
+     * Strip internal instruction blocks that are prepended before sending to Codex.
+     * These blocks are useful model context, but should not be rendered as user history.
+     */
+    public static String stripSystemTags(String text) {
+        return UserMessageSanitizer.sanitizeUserFacingText(text);
+    }
+
+    private static JsonArray textContentBlocks(String text) {
+        JsonArray content = new JsonArray();
+        JsonObject textBlock = new JsonObject();
+        textBlock.addProperty("type", "text");
+        textBlock.addProperty("text", text);
+        content.add(textBlock);
+        return content;
     }
 
     /**
@@ -403,6 +453,21 @@ public class CodexMessageConverter {
             }
         }
 
+        // Map Codex protocol field `cmd` to frontend-expected `command` for shell-like tools.
+        // The live path emits {command, description} via handleCommandExecution, so this
+        // branch only fires when replaying Codex history (function_call payload retains `cmd`).
+        // Without this mapping BashToolGroupBlock renders blank timeline rows because
+        // parseBashItem only reads input.command.
+        if (("exec_command".equals(toolName) || "shell_command".equals(toolName))
+                && toolInput != null && toolInput.isJsonObject()) {
+            JsonObject inputObj = toolInput.getAsJsonObject();
+            if (inputObj.has("cmd") && !inputObj.has("command")) {
+                JsonObject enriched = inputObj.deepCopy();
+                enriched.add("command", inputObj.get("cmd"));
+                toolInput = enriched;
+            }
+        }
+
         // Enrich incremental writes with the previously discovered destination path.
         if ("write".equals(toolName) && toolInput != null && toolInput.isJsonObject()) {
             JsonObject inputObj = toolInput.getAsJsonObject();
@@ -465,7 +530,7 @@ public class CodexMessageConverter {
         toolResult.addProperty("type", "tool_result");
         toolResult.addProperty("tool_use_id", payload.has("call_id") ? payload.get("call_id").getAsString() : "unknown");
 
-        String output = payload.has("output") ? payload.get("output").getAsString() : "";
+        String output = safeGetAsString(payload.get("output"), "");
         toolResult.addProperty("content", output);
 
         JsonArray content = new JsonArray();
@@ -495,15 +560,7 @@ public class CodexMessageConverter {
 
         String toolName = payload.has("name") ? payload.get("name").getAsString() : "unknown";
 
-        // Safely extract tool input as string, handling non-primitive types
-        String toolInput;
-        if (payload.has("input") && payload.get("input").isJsonPrimitive()) {
-            toolInput = payload.get("input").getAsString();
-        } else if (payload.has("input")) {
-            toolInput = payload.get("input").toString();
-        } else {
-            toolInput = "";
-        }
+        String toolInput = safeGetAsString(payload.get("input"), "");
 
         JsonObject toolUse = new JsonObject();
         toolUse.addProperty("type", "tool_use");

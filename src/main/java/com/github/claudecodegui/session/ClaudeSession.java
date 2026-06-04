@@ -115,7 +115,19 @@ public class ClaudeSession {
         default void onThinkingDelta(String delta) {
         }
 
+        /**
+         * Called when a block reset signal is received during streaming.
+         * This indicates a new assistant message has started within the stream
+         * (e.g., after a tool_use loop iteration), and the frontend should
+         * clear its streaming content refs to prevent cross-turn content merging.
+         */
+        default void onBlockReset() {
+        }
+
         default void onUsageUpdate(int usedTokens, int maxTokens) {
+        }
+
+        default void onUserMessageUuidPatched(String content, String uuid) {
         }
     }
 
@@ -155,8 +167,8 @@ public class ClaudeSession {
                     }
 
                     @Override
-                    public List<JsonObject> getClaudeSessionMessages(String sessionId, String cwd) {
-                        return claudeSDKBridge.getSessionMessages(sessionId, cwd);
+                    public JsonObject getLatestClaudeUserMessage(String sessionId, String cwd) {
+                        return claudeSDKBridge.getLatestClaudeUserMessage(sessionId, cwd);
                     }
                 }
         );
@@ -200,6 +212,13 @@ public class ClaudeSession {
         return state.getMessages();
     }
 
+    /**
+     * 提供底层会话状态访问，用于历史恢复等需要直接重建会话内存态的场景。
+     */
+    public SessionState getState() {
+        return state;
+    }
+
     public String getSummary() {
         return state.getSummary();
     }
@@ -213,6 +232,9 @@ public class ClaudeSession {
      */
     public void setSessionInfo(String sessionId, String cwd) {
         state.setSessionId(sessionId);
+        if (sessionId != null && !sessionId.trim().isEmpty()) {
+            callbackFacade.notifySessionIdReceived(sessionId);
+        }
         if (cwd != null) {
             setCwd(cwd);
         } else {

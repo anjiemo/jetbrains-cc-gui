@@ -68,10 +68,13 @@ class CodexHistorySessionService {
         }
 
         try (Stream<Path> paths = Files.walk(sessionsDir)) {
+            // Use contains() to match both UUID-based session IDs (from session_meta.id)
+            // and full filename-based IDs. The Codex SDK thread ID (UUID) is embedded
+            // in the filename (e.g., rollout-2026-04-01T14-57-29-<UUID>.jsonl).
             return paths
                     .filter(Files::isRegularFile)
-                    .filter(path -> path.getFileName().toString().startsWith(sessionId))
                     .filter(path -> path.toString().endsWith(".jsonl"))
+                    .filter(path -> path.getFileName().toString().contains(sessionId))
                     .findFirst()
                     .orElse(null);
         }

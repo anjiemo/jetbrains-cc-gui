@@ -2,10 +2,113 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { memo, useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { openBrowser, openFile } from '../utils/bridge';
-import hljs from 'highlight.js';
+import { openBrowser, openClass, openFile } from '../utils/bridge';
+import { useMarkdownFileLinkTooltip } from '../hooks/useMarkdownFileLinkTooltip';
+import {
+  decorateExistingAnchors,
+  linkifyHtml,
+  linkifyPlainTextSegment,
+} from '../utils/linkify';
+import {
+  getLinkifyCapabilities,
+  subscribeLinkifyCapabilities,
+  type LinkifyCapabilities,
+} from '../utils/linkifyCapabilities';
+import hljs from 'highlight.js/lib/core';
+import bash from 'highlight.js/lib/languages/bash';
+import css from 'highlight.js/lib/languages/css';
+import diff from 'highlight.js/lib/languages/diff';
+import dockerfile from 'highlight.js/lib/languages/dockerfile';
+import go from 'highlight.js/lib/languages/go';
+import java from 'highlight.js/lib/languages/java';
+import javascript from 'highlight.js/lib/languages/javascript';
+import json from 'highlight.js/lib/languages/json';
+import kotlin from 'highlight.js/lib/languages/kotlin';
+import markdown from 'highlight.js/lib/languages/markdown';
+import plaintext from 'highlight.js/lib/languages/plaintext';
+import python from 'highlight.js/lib/languages/python';
+import rust from 'highlight.js/lib/languages/rust';
+import shell from 'highlight.js/lib/languages/shell';
+import sql from 'highlight.js/lib/languages/sql';
+import typescript from 'highlight.js/lib/languages/typescript';
+import xml from 'highlight.js/lib/languages/xml';
+import yaml from 'highlight.js/lib/languages/yaml';
 import 'highlight.js/styles/github-dark.css';
 import { markedHighlight } from 'marked-highlight';
+
+const SAFE_HREF_PROTOCOL_REGEX = /^(?:https?|mailto):/i;
+const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
+const URI_SCHEME_REGEX = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+let hrefSanitizerHookInstalled = false;
+
+function isAllowedHrefValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (WINDOWS_DRIVE_PATH_REGEX.test(trimmed)) {
+    return true;
+  }
+
+  if (!URI_SCHEME_REGEX.test(trimmed)) {
+    return true;
+  }
+
+  return SAFE_HREF_PROTOCOL_REGEX.test(trimmed);
+}
+
+function ensureSafeHrefSanitizerHook(): void {
+  if (hrefSanitizerHookInstalled) {
+    return;
+  }
+
+  DOMPurify.addHook('uponSanitizeAttribute', (_node, data) => {
+    if (data.attrName !== 'href' || typeof data.attrValue !== 'string') {
+      return;
+    }
+
+    if (!isAllowedHrefValue(data.attrValue)) {
+      data.keepAttr = false;
+    }
+  });
+
+  hrefSanitizerHookInstalled = true;
+}
+
+ensureSafeHrefSanitizerHook();
+
+const highlightLanguages: Array<[string, Parameters<typeof hljs.registerLanguage>[1]]> = [
+  ['bash', bash],
+  ['css', css],
+  ['diff', diff],
+  ['dockerfile', dockerfile],
+  ['go', go],
+  ['java', java],
+  ['javascript', javascript],
+  ['json', json],
+  ['kotlin', kotlin],
+  ['markdown', markdown],
+  ['plaintext', plaintext],
+  ['python', python],
+  ['rust', rust],
+  ['shell', shell],
+  ['sql', sql],
+  ['typescript', typescript],
+  ['xml', xml],
+  ['yaml', yaml],
+];
+
+highlightLanguages.forEach(([name, language]) => {
+  hljs.registerLanguage(name, language);
+});
+
+hljs.registerAliases(['js', 'jsx'], { languageName: 'javascript' });
+hljs.registerAliases(['ts', 'tsx'], { languageName: 'typescript' });
+hljs.registerAliases(['sh', 'zsh'], { languageName: 'bash' });
+hljs.registerAliases(['html', 'xhtml', 'svg'], { languageName: 'xml' });
+hljs.registerAliases(['yml'], { languageName: 'yaml' });
+
 // Lazy-loaded mermaid singleton (deferred until first diagram is encountered)
 let mermaidInstance: typeof import('mermaid').default | null = null;
 async function getMermaid() {
@@ -66,6 +169,19 @@ const MERMAID_KEYWORDS = new Set([
   'block-beta',
 ]);
 
+const MERMAID_FENCE_REGEX = /```mermaid[\s\S]*?```/i;
+
+// Pre-compiled regex: matches any mermaid keyword at the start of a line
+const MERMAID_KEYWORD_REGEX = new RegExp(
+  `(^|\\n)\\s*(?:${[...MERMAID_KEYWORDS].join('|')})\\b`,
+  'i',
+);
+
+function hasPossibleMermaidContent(content: string): boolean {
+  if (!content) return false;
+  return MERMAID_FENCE_REGEX.test(content) || MERMAID_KEYWORD_REGEX.test(content);
+}
+
 marked.setOptions({
   breaks: false,
   gfm: true,
@@ -119,6 +235,63 @@ function makeStreamSafe(content: string): string {
 }
 
 /**
+ * Strip system-internal XML tags injected by Claude Code's prompt protocol.
+ * Mirrors `stripPromptXMLTags` from the CLI source (src/utils/messages.ts).
+ */
+const SYSTEM_XML_TAGS_RE =
+  /<(commit_analysis|context|function_analysis|pr_analysis)>[\s\S]*?<\/\1>\n?/g;
+
+function stripSystemTags(content: string): string {
+  const result = content.replace(SYSTEM_XML_TAGS_RE, '');
+  return result !== content ? result.trim() : result;
+}
+
+/**
+ * Escape XML/HTML-like tags in prose text so they are rendered as literal text
+ * rather than being parsed as DOM elements by the browser.
+ * Matches opening <tag>, closing </tag>, self-closing <tag/>, and <!-- comments -->.
+ * Does NOT touch content inside code fences (caller responsibility).
+ */
+const XML_TAG_RE = /<!--[\s\S]*?-->|<\/?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^>]*)?\/?>/g;
+
+function escapeXmlTags(text: string): string {
+  return text.replace(XML_TAG_RE, (match) =>
+    match.replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+  );
+}
+
+/**
+ * Strip system XML tags and escape remaining XML tags only in prose segments
+ * (outside fenced code blocks and inline code). Preserves code content as-is
+ * so marked can handle XML tags inside code naturally (auto-escape).
+ */
+const CODE_FENCE_RE = /(```[\s\S]*?```)/g;
+const INLINE_CODE_RE = /(`[^`\n]+`)/g;
+const BOLD_SYNTAX_RE = /(\*\*[^*]+\*\*)/g;
+
+function stripAndEscapeOutsideCodeBlocks(content: string): string {
+  // First split by fenced code blocks
+  const fenceParts = content.split(CODE_FENCE_RE);
+
+  return fenceParts
+    .map((fencePart, fenceIdx) => {
+      // Odd indices are code fence matches — leave untouched
+      if (fenceIdx % 2 === 1) return fencePart;
+
+      // Then split by inline code within prose segments
+      const inlineParts = fencePart.split(INLINE_CODE_RE);
+      return inlineParts
+        .map((inlinePart, inlineIdx) => {
+          // Odd indices are inline code matches — leave untouched for marked to handle
+          if (inlineIdx % 2 === 1) return inlinePart;
+          return escapeXmlTags(stripSystemTags(inlinePart));
+        })
+        .join('');
+    })
+    .join('');
+}
+
+/**
  * Lightweight renderer for streaming content.
  * Provides basic formatting (code fences, line breaks, inline code, bold)
  * without the heavy marked.parse() + DOMPurify + DOMParser pipeline.
@@ -129,7 +302,94 @@ function safeLang(lang: string): string {
   return lang.replace(/[^a-zA-Z0-9_.-]/g, '');
 }
 
-function renderStreamingContent(content: string): string {
+function renderStreamingInlineText(
+  text: string,
+  capabilities: LinkifyCapabilities,
+  handleInlineCode: boolean = true,
+): string {
+  if (handleInlineCode) {
+    return text
+      .split(INLINE_CODE_RE)
+      .map((inlinePart) => {
+        const inlineCodeMatch = /^`([^`\n]+)`$/.exec(inlinePart);
+        if (inlineCodeMatch) {
+          // Inline code content should also be linkified
+          const linkifiedCode = linkifyPlainTextSegment(inlineCodeMatch[1], capabilities);
+          return `<code>${linkifiedCode}</code>`;
+        }
+
+        return inlinePart
+          .split(BOLD_SYNTAX_RE)
+          .map((part) => {
+            const boldMatch = /^\*\*([^*]+)\*\*$/.exec(part);
+            if (boldMatch) {
+              return `<strong>${linkifyPlainTextSegment(boldMatch[1], capabilities)}</strong>`;
+            }
+
+            return linkifyPlainTextSegment(part, capabilities);
+          })
+          .join('');
+      })
+      .join('');
+  }
+
+  // When inline code is already handled upstream, just process bold and linkify
+  return text
+    .split(BOLD_SYNTAX_RE)
+    .map((part) => {
+      const boldMatch = /^\*\*([^*]+)\*\*$/.exec(part);
+      if (boldMatch) {
+        return `<strong>${linkifyPlainTextSegment(boldMatch[1], capabilities)}</strong>`;
+      }
+
+      return linkifyPlainTextSegment(part, capabilities);
+    })
+    .join('');
+}
+
+function renderStreamingProseSegment(
+  segment: string,
+  capabilities: LinkifyCapabilities,
+): string {
+  // First strip system-internal XML tags from the prose segment
+  const cleaned = stripSystemTags(segment);
+
+  // Split by inline code to avoid double-escaping
+  // linkifyPlainTextSegment already handles HTML escaping for inline code content
+  const inlineParts = cleaned.split(INLINE_CODE_RE);
+
+  const processedParts = inlineParts.map((part, idx) => {
+    // Odd indices are inline code — pass to linkifyPlainTextSegment which escapes HTML
+    if (idx % 2 === 1) {
+      const inlineContent = part.slice(1, -1); // Remove surrounding backticks
+      return `<code>${linkifyPlainTextSegment(inlineContent, capabilities)}</code>`;
+    }
+    // Even indices are prose — escape XML tags then render inline formatting
+    return renderStreamingInlineText(escapeXmlTags(part), capabilities, false);
+  });
+
+  // Now wrap in paragraph/heading structure based on paragraph breaks
+  const combined = processedParts.join('');
+  return combined
+    .split(/\n{2,}/)
+    .filter((block) => block.length > 0)
+    .map((block) => {
+      const headingMatch = /^(#{1,6})\s+(.+)$/.exec(block);
+      if (headingMatch && !block.includes('\n')) {
+        const level = headingMatch[1].length;
+        return `<h${level}>${headingMatch[2]}</h${level}>`;
+      }
+
+      const lines = block.split('\n').join('<br/>');
+      return `<p>${lines}</p>`;
+    })
+    .join('');
+}
+
+function renderStreamingContent(
+  content: string,
+  capabilities: LinkifyCapabilities,
+): string {
   if (!content) return '';
 
   const safeContent = makeStreamSafe(content);
@@ -188,33 +448,16 @@ function renderStreamingContent(content: string): string {
       // Already wrapped in <pre> — pass through
       if (seg.startsWith('<pre>')) return seg;
 
-      let html = seg
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-
-      // Inline code
-      html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-      // Bold
-      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      // Headings (# ... ######)
-      html = html.replace(/^(#{1,6})\s+(.+)$/gm, (_m, hashes: string, text: string) => {
-        const level = hashes.length;
-        return `<h${level}>${text}</h${level}>`;
-      });
-      // Paragraph breaks
-      html = html.replace(/\n\n/g, '</p><p>');
-      // Single line breaks
-      html = html.replace(/\n/g, '<br/>');
-
-      return `<p>${html}</p>`;
+      // renderStreamingProseSegment handles stripSystemTags + escapeXmlTags internally,
+      // and preserves inline code content for natural HTML escaping
+      return renderStreamingProseSegment(seg, capabilities);
     })
     .join('');
 
   // Sanitize the assembled HTML to prevent XSS even during streaming
   return DOMPurify.sanitize(raw, {
-    ALLOWED_TAGS: ['p', 'br', 'pre', 'code', 'strong', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
-    ALLOWED_ATTR: ['class'],
+    ALLOWED_TAGS: ['a', 'p', 'br', 'pre', 'code', 'strong', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+    ALLOWED_ATTR: ['class', 'href', 'data-linkify'],
   });
 }
 
@@ -231,6 +474,9 @@ const copyIconSvg = `
 
 const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps) => {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [linkifyCapabilities, setLinkifyCapabilities] = useState<LinkifyCapabilities>(() =>
+    getLinkifyCapabilities(),
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const { t, i18n } = useTranslation();
 
@@ -240,6 +486,12 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
   // Ref for tracking retry count
   const mermaidRetryRef = useRef(0);
   const MERMAID_MAX_RETRIES = 3;
+
+  const fileLinkTooltip = useMarkdownFileLinkTooltip();
+
+  useEffect(() => {
+    return subscribeLinkifyCapabilities(setLinkifyCapabilities);
+  }, []);
 
   // Render mermaid diagrams
   const renderMermaidDiagrams = useCallback(async () => {
@@ -280,7 +532,7 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
       const loadingEl = document.createElement('div');
       loadingEl.className = 'mermaid-loading';
       loadingEl.textContent = 'Loading diagram\u2026';
-      loadingEl.style.cssText = 'padding:12px;color:var(--text-secondary,#888);font-style:italic;';
+      loadingEl.style.cssText = 'padding:12px;color:var(--text-secondary,#888);';
       if (wrapper?.classList.contains('code-block-wrapper')) {
         wrapper.insertBefore(loadingEl, pre);
       } else {
@@ -327,6 +579,10 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
   // Render mermaid diagrams after HTML updates (skip during streaming to prevent flicker)
   useEffect(() => {
     if (isStreaming) return;
+    if (!hasPossibleMermaidContent(content)) {
+      mermaidRetryRef.current = 0;
+      return;
+    }
 
     let retryTimeoutId: ReturnType<typeof setTimeout> | null = null;
     let retryRafId: number | null = null;
@@ -387,11 +643,14 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
 
       // During streaming, use lightweight renderer to avoid heavy parsing on every delta
       if (isStreaming) {
-        return renderStreamingContent(trimmedContent);
+        return renderStreamingContent(trimmedContent, linkifyCapabilities);
       }
 
       // Non-streaming: full markdown pipeline
-      const parsed = marked.parse(trimmedContent);
+      // Strip system-internal XML tags and escape remaining XML tags outside code blocks
+      // (mirrors CLI's stripPromptXMLTags + html token discard)
+      const cleaned = stripAndEscapeOutsideCodeBlocks(trimmedContent);
+      const parsed = marked.parse(cleaned);
       const sanitized = DOMPurify.sanitize(
         typeof parsed === 'string' ? parsed : String(parsed),
         { ADD_ATTR: ['class', 'data-lang', 'data-copy-success', 'data-copy-title'] }
@@ -403,6 +662,7 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
       }
 
       const doc = new DOMParser().parseFromString(rawHtml, 'text/html');
+    decorateExistingAnchors(doc.body);
       const pres = doc.querySelectorAll('pre');
       const copySuccessText = t('markdown.copySuccess');
       const copyCodeTitle = t('markdown.copyCode');
@@ -439,11 +699,28 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
         wrapper.appendChild(btn);
       });
 
+      linkifyHtml(doc.body, linkifyCapabilities);
+
       return doc.body.innerHTML.trim();
-    } catch {
-      return content;
+    } catch (e) {
+      // If marked/DOMPurify throws, never return raw `content` to
+      // dangerouslySetInnerHTML — escape HTML special chars so any malicious
+      // payload renders as literal text instead of executable markup.
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[MarkdownBlock] Render failed, falling back to escaped text:', e);
+      }
+      return content.replace(/[&<>"']/g, (ch) => {
+        switch (ch) {
+          case '&': return '&amp;';
+          case '<': return '&lt;';
+          case '>': return '&gt;';
+          case '"': return '&quot;';
+          case "'": return '&#39;';
+          default: return ch;
+        }
+      });
     }
-  }, [content, isStreaming, i18n.language, t]);
+  }, [content, isStreaming, i18n.language, linkifyCapabilities, t]);
 
   // Force DOM refresh when streaming ends to fix potential layout corruption from streaming render
   useEffect(() => {
@@ -482,9 +759,15 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
   }, [isStreaming, html, renderMermaidDiagrams]);
 
   const handleClick = async (event: React.MouseEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement;
+    // React synthetic events may have a Text node as target when the user
+    // clicks inside an <a> element. Walk up to the parent element so that
+    // element.closest() can be used safely.
+    const targetNode = event.target as unknown as Node;
+    const target = targetNode.nodeType === Node.TEXT_NODE
+      ? (targetNode as Text).parentElement
+      : (event.target as HTMLElement);
 
-    const copyBtn = target.closest('button.copy-code-btn') as HTMLButtonElement | null;
+    const copyBtn = target?.closest('button.copy-code-btn') as HTMLButtonElement | null;
     if (copyBtn && containerRef.current?.contains(copyBtn)) {
       event.preventDefault();
       event.stopPropagation();
@@ -501,13 +784,30 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
       return;
     }
 
-    const img = target.closest('img');
+    const img = target?.closest('img');
     if (img && img.getAttribute('src')) {
       setPreviewSrc(img.getAttribute('src'));
       return;
     }
 
-    const anchor = target.closest('a');
+    let anchor = target?.closest('a');
+
+    // Fallback: if the click target is not inside an <a> (e.g. a portal
+    // tooltip with broken pointer-events overlaying the link), use the
+    // click coordinates to find which <a> was actually clicked.
+    if (!anchor && containerRef.current) {
+      const x = event.clientX;
+      const y = event.clientY;
+      const links = containerRef.current.querySelectorAll('a');
+      for (const link of Array.from(links)) {
+        const rect = link.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          anchor = link as HTMLAnchorElement;
+          break;
+        }
+      }
+    }
+
     if (!anchor) {
       return;
     }
@@ -518,7 +818,19 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
       return;
     }
 
-    if (/^(https?:|mailto:)/.test(href)) {
+    const linkType = anchor.getAttribute('data-linkify');
+
+    if (linkType === 'file') {
+      openFile(href);
+      return;
+    }
+
+    if (linkType === 'class') {
+      openClass(href);
+      return;
+    }
+
+    if (linkType === 'url' || /^(https?:|mailto:)/.test(href)) {
       openBrowser(href);
     } else {
       openFile(href);
@@ -532,7 +844,12 @@ const MarkdownBlock = ({ content = '', isStreaming = false }: MarkdownBlockProps
         className="markdown-content"
         dangerouslySetInnerHTML={{ __html: html }}
         onClick={handleClick}
+        onMouseOver={fileLinkTooltip.handleMouseOver}
+        onMouseMove={fileLinkTooltip.handleMouseMove}
+        onMouseOut={fileLinkTooltip.handleMouseOut}
       />
+      {/* Tooltip is managed via native DOM API in handleMouseOver/handleMouseOut
+          to avoid React re-render issues that break click events in JCEF. */}
       {previewSrc && (
         <div
           className="image-preview-overlay"

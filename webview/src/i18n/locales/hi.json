@@ -12,6 +12,7 @@
     "close": "बंद करें",
     "newSession": "नया सत्र",
     "newTab": "नया टैब",
+    "dontAskAgain": "फिर से न पूछें",
     "history": "इतिहास",
     "settings": "सेटिंग्स",
     "thinking": "सोच रहा है",
@@ -87,8 +88,34 @@
     "attachmentFile": "[अटैचमेंट: {{fileName}}]",
     "unknownFile": "Unknown file",
     "attachmentsUploaded": "[अटैचमेंट अपलोड हो गए]",
-    "streamingConnected": "Claude कनेक्ट हो गया, आपके प्रश्न को समझ रहा है",
-    "showEarlierMessages": "{{count}} पुराने संदेश दिखाएं"
+    "streamingConnected": "{{provider}} कनेक्ट हो गया, आपके प्रश्न को समझ रहा है",
+    "showEarlierMessages": "{{count}} पुराने संदेश दिखाएं",
+    "totalDuration": "इस जवाब में लगा समय",
+    "search": {
+      "ariaLabel": "बातचीत में खोजें",
+      "placeholder": "बातचीत में खोजें...",
+      "next": "अगला मिलान (Enter)",
+      "previous": "पिछला मिलान (Shift+Enter)",
+      "close": "बंद करें (Esc)",
+      "counter": "{{current}}/{{total}}",
+      "noResults": "कोई परिणाम नहीं",
+      "searching": "खोज रहे हैं...",
+      "expandedHint": "{{count}} पुराने संदेश विस्तृत किए गए",
+      "matchCase": "केस मिलान (Alt+C)",
+      "wholeWord": "पूरा शब्द (Alt+W)",
+      "regex": "नियमित अभिव्यक्ति (Alt+R)",
+      "invalidRegex": "अमान्य रेगेक्स",
+      "openTooltip": "बातचीत में खोजें (Cmd/Ctrl+F)"
+    },
+    "compactSummary": {
+      "summarizedConversation": "सारांशित वार्तालाप",
+      "compactSummary": "संक्षिप्त सारांश",
+      "messagesUpTo": "इस बिंदु तक के {{count}} संदेश सारांशित किए गए",
+      "messagesFrom": "इस बिंदु से आगे के {{count}} संदेश सारांशित किए गए",
+      "userContext": "संदर्भ: \"{{context}}\"",
+      "expand": "सारांश विस्तृत करें",
+      "collapse": "सारांश संक्षिप्त करें"
+    }
   },
   "settings": {
     "title": "सेटिंग्स",
@@ -111,6 +138,7 @@
       },
       "language": {
         "label": "इंटरफ़ेस भाषा",
+        "followIde": "IDE का अनुसरण करें",
         "simplifiedChinese": "简体中文",
         "traditionalChinese": "繁體中文",
         "english": "English",
@@ -119,7 +147,8 @@
         "french": "Français",
         "japanese": "日本語",
         "russian": "Русский",
-        "korean": "한국어"
+        "korean": "한국어",
+        "portuguese": "Português (Brasil)"
       },
       "nodePath": {
         "label": "Node.js पथ",
@@ -144,8 +173,28 @@
         "level6": "सबसे बड़ा (140%)"
       },
       "editorFont": {
-        "label": "फ़ॉन्ट (संपादक फ़ॉन्ट का अनुसरण करता है)",
-        "hint": "यहाँ संपादन योग्य नहीं है। संशोधित करने के लिए, IDEA सेटिंग्स → संपादक → फ़ॉन्ट पर जाएं (प्लगइन फ़ॉन्ट प्रभावी होने के लिए IDEA पुनः आरंभ करें)"
+        "label": "UI फ़ॉन्ट",
+        "hint": "यहाँ प्लगइन UI का फ़ॉन्ट बदला जाता है; कोड के लिए अलग फ़ॉन्ट चुना जा सकता है।",
+        "followOption": "IDEA UI फ़ॉन्ट का पालन करें ({{font}})",
+        "customOption": "कस्टम UI फ़ॉन्ट फ़ाइल",
+        "customPathLabel": "UI फ़ॉन्ट फ़ाइल पथ",
+        "customPathPlaceholder": ".ttf / .otf UI फ़ॉन्ट फ़ाइल का पथ चुनें या दर्ज करें",
+        "browse": "ब्राउज़ करें",
+        "warningUnavailable": "UI फ़ॉन्ट उपलब्ध नहीं है, अभी IDEA UI फ़ॉन्ट उपयोग में है",
+        "statusFollowEditor": "अभी IDEA UI फ़ॉन्ट उपयोग में है: {{font}}",
+        "statusCustom": "अभी कस्टम UI फ़ॉन्ट उपयोग में है: {{font}}"
+      },
+      "codeFont": {
+        "label": "कोड फ़ॉन्ट",
+        "hint": "Markdown कोड और कमांड ब्लॉक इस फ़ॉन्ट का उपयोग करते हैं।",
+        "followOption": "एडिटर फ़ॉन्ट का पालन करें ({{font}})",
+        "customOption": "कस्टम कोड फ़ॉन्ट फ़ाइल",
+        "customPathLabel": "कोड फ़ॉन्ट फ़ाइल पथ",
+        "customPathPlaceholder": ".ttf / .otf कोड फ़ॉन्ट फ़ाइल का पथ चुनें या दर्ज करें",
+        "browse": "ब्राउज़ करें",
+        "warningUnavailable": "कोड फ़ॉन्ट उपलब्ध नहीं है, अभी एडिटर फ़ॉन्ट उपयोग में है",
+        "statusFollowEditor": "अभी एडिटर फ़ॉन्ट उपयोग में है: {{font}}",
+        "statusCustom": "अभी कस्टम कोड फ़ॉन्ट उपयोग में है: {{font}}"
       },
       "streaming": {
         "label": "Streaming",
@@ -159,11 +208,31 @@
         "disabled": "अक्षम",
         "hint": "सक्षम होने पर, प्रोजेक्ट ट्री में फ़ाइल चुनने पर उसका फ़ाइल पथ स्वचालित रूप से AI को भेजा जाएगा (ध्यान दें: केवल फ़ाइल पथ भेजा जाता है, फ़ाइल सामग्री नहीं)। अक्षम होने पर मैन्युअल कार्रवाई आवश्यक है।"
       },
+      "promptEnhancer": {
+        "label": "Prompt Enhancer",
+        "modelLabel": "Enhancer Model",
+        "resetToDefault": "Restore Default",
+        "providerAvailable": "Available",
+        "providerUnavailable": "Currently unavailable",
+        "provider": {
+          "claude": "Claude Code",
+          "codex": "Codex"
+        },
+        "currentProviderAuto": "Currently using automatic selection: {{provider}}",
+        "currentProviderManual": "Currently using manually selected provider: {{provider}}",
+        "currentProviderUnavailable": "The selected provider is currently unavailable: {{provider}}"
+      },
       "diffExpanded": {
         "label": "डिफ़ॉल्ट रूप से अंतर दिखाएं",
         "enabled": "विस्तारित",
         "disabled": "संक्षिप्त",
         "hint": "सक्षम होने पर, चैट में कोड अंतर डिफ़ॉल्ट रूप से विस्तारित होंगे। अक्षम होने पर, अंतर संक्षिप्त शुरू होते हैं।"
+      },
+      "taskCompletionNotification": {
+        "label": "कार्य पूर्ण सूचना",
+        "enabled": "सक्षम",
+        "disabled": "अक्षम",
+        "hint": "सक्षम होने पर, AI कार्य पूरा होने पर सिस्टम सूचना दिखाता है। अक्षम होने पर, कोई सूचना नहीं दिखती।"
       },
       "sendShortcut": {
         "label": "भेजने का शॉर्टकट",
@@ -171,6 +240,11 @@
         "enterDesc": "संदेश भेजने के लिए Enter दबाएं, नई पंक्ति के लिए Shift+Enter",
         "cmdEnter": "⌘/Ctrl+Enter से भेजें",
         "cmdEnterDesc": "संदेश भेजने के लिए ⌘/Ctrl+Enter दबाएं, नई पंक्ति के लिए Enter"
+      },
+      "permissionDialogTimeout": {
+        "label": "अनुमति और प्रश्न संवाद टाइमआउट",
+        "unit": "सेकंड",
+        "hint": "Claude प्रश्न संवाद और अनुमति अनुरोध संवाद के लिए टाइमआउट सेट करें (30~3600 सेकंड)। टाइमआउट के बाद, संवाद स्वचालित रूप से बंद हो जाएगा और Claude जारी रहेगा।"
       },
       "chatBgColor": {
         "label": "चैट पृष्ठभूमि रंग",
@@ -183,6 +257,12 @@
         "custom": "कस्टम",
         "reset": "रीसेट करें",
         "hint": "अपने संदेशों की पृष्ठभूमि रंग को अनुकूलित करें। थीम डिफ़ॉल्ट का पालन करने के लिए खाली छोड़ दें।"
+      },
+      "newSessionConfirm": {
+        "label": "नया सत्र पुष्टि",
+        "enabled": "सक्षम",
+        "disabled": "अक्षम",
+        "hint": "अक्षम होने पर, मौजूदा संदेशों वाले सत्र में नया बनाने पर पुष्टि संवाद नहीं दिखेगा।"
       }
     },
     "providers": "प्रदाता प्रबंधन",
@@ -230,13 +310,32 @@
     "mcpDesc": "Model Context Protocol सर्वर कॉन्फ़िगर और प्रबंधित करें",
     "permissions": "अनुमति कॉन्फ़िगरेशन",
     "permissionsDesc": "Claude Code की फ़ाइल एक्सेस और ऑपरेशन अनुमतियां प्रबंधित करें",
+    "promptEnhancer": {
+      "title": "Prompt Enhancer",
+      "description": "Choose which provider and model should be used when enhancing prompts before sending them."
+    },
     "commit": {
       "title": "Commit AI",
       "description": "Configure AI-generated Git commit message behavior",
+      "providerModel": {
+        "label": "कमिट मॉडल प्रदाता",
+        "modelLabel": "कमिट मॉडल",
+        "resetToDefault": "रीसेट",
+        "providerAvailable": "उपलब्ध",
+        "providerUnavailable": "अनुपलब्ध",
+        "currentProviderAuto": "वर्तमान में स्वचालित चयन का उपयोग: {{provider}}",
+        "currentProviderManual": "वर्तमान में मैन्युअल रूप से चयनित प्रदाता का उपयोग: {{provider}}",
+        "currentProviderUnavailable": "चयनित प्रदाता वर्तमान में अनुपलब्ध है: {{provider}}"
+      },
       "prompt": {
         "label": "Additional Prompt",
         "placeholder": "Add your extra requirements here, e.g., generate commit in English, include issue number, etc...",
         "hint": "The plugin has built-in CCG Commits specification prompts. Content you add here will be used as additional requirements, and AI will prioritize your instructions."
+      },
+      "projectPrompt": {
+        "label": "प्रोजेक्ट-विशिष्ट अतिरिक्त प्रॉम्प्ट",
+        "placeholder": "यहाँ प्रोजेक्ट-विशिष्ट आवश्यकताएँ जोड़ें, जैसे: scope में मॉड्यूल नाम का उपयोग करें, commit body में प्रभाव क्षेत्र शामिल करें, आदि...",
+        "hint": "यह प्रॉम्प्ट केवल वर्तमान प्रोजेक्ट पर लागू होता है और वैश्विक अतिरिक्त प्रॉम्प्ट के साथ मिलकर जोड़ा जाता है। जब दोनों में विरोध हो, तो प्रोजेक्ट प्रॉम्प्ट को प्राथमिकता दी जाती है। विभिन्न प्रोजेक्ट्स को स्वतंत्र रूप से कॉन्फ़िगर किया जा सकता है।"
       },
       "codeReview": {
         "comingSoon": "Coming Soon",
@@ -287,6 +386,12 @@
           "minutesAgo_other": "{{count}} मिनट पहले",
           "justNow": "अभी"
         }
+      },
+      "aiTitleGeneration": {
+        "label": "AI सत्र शीर्षक स्वतः निर्माण",
+        "enabled": "सक्षम",
+        "disabled": "अक्षम",
+        "hint": "सक्षम होने पर, नए सत्र की पहली प्रतिक्रिया के बाद Haiku मॉडल छोटा शीर्षक स्वतः बनाएगा। अक्षम होने पर सत्र पहले उपयोगकर्ता संदेश को शीर्षक के रूप में रखेगा।"
       }
     },
     "codexFeatureUnavailable": "यह सेटिंग अनुभाग अभी Codex में उपलब्ध नहीं है। कृपया Claude Code पर स्विच करें।",
@@ -471,6 +576,7 @@
         "deepseek": "DeepSeek",
         "minimax": "MiniMax",
         "xiaomi": "Xiaomi MiMo",
+        "xiaomiPlan": "Xiaomi MiMo Plan",
         "qwen": "Alibaba Qwen",
         "openrouter": "OpenRouter"
       }
@@ -509,9 +615,28 @@
         "modelIdPlaceholder": "Model ID (required, e.g., gpt-4o)",
         "modelLabelPlaceholder": "Display name (optional)",
         "modelDescPlaceholder": "Model description (optional)",
+        "cliLoginProviderName": "Codex CLI लॉगिन",
+        "cliLoginProviderDescription": "Codex CLI से ChatGPT सब्सक्रिप्शन क्रेडेंशियल्स का उपयोग करें",
+        "cliLoginAuthorizeTitle": "Codex CLI लॉगिन सक्षम करें",
+        "cliLoginAuthorizeMessage": "यह config.toml को साफ़ करेगा और Codex CLI से ChatGPT सब्सक्रिप्शन क्रेडेंशियल्स का उपयोग करेगा।",
+        "cliLoginAuthorizeDetail": "सुनिश्चित करें कि आपने टर्मिनल में 'codex login' से लॉगिन किया हो। आपके वर्तमान config.toml को बैकअप किया जाएगा।",
+        "cliLoginDisableTitle": "Codex CLI लॉगिन अक्षम करें",
+        "cliLoginDisableMessage": "यह पुराने config.toml को पुनर्स्थापित करेगा और API की प्रमाणीकरण पर स्विच करेगा।",
         "modelIdRequired": "Model ID is required",
         "modelIdInvalid": "Invalid model ID format (only letters, numbers, dots, hyphens, underscores, slashes and colons allowed)",
-        "modelIdDuplicate": "Model ID already exists"
+        "modelIdDuplicate": "Model ID already exists",
+        "envVarsTitle": "Environment Variables",
+        "messageEnvLabel": "Message Environment Variables",
+        "messageEnvHint": "Custom environment variables injected into the Codex message subprocess",
+        "mcpEnvLabel": "MCP Environment Variables",
+        "mcpEnvHint": "Custom environment variables injected into the MCP tool discovery subprocess",
+        "envKeyPlaceholder": "ENV_KEY",
+        "envValuePlaceholder": "value",
+        "addEnvVar": "Add Variable",
+        "envKeyInvalid": "Invalid key name (must start with letter/underscore, alphanumeric only)",
+        "envKeyProtected": "Cannot set built-in variable: {{key}}",
+        "envKeyDuplicate": "Duplicate key: {{key}}",
+        "envValueTooLong": "मान बहुत लंबा है (अधिकतम {{max}} अक्षर)"
       }
     },
     "agent": {
@@ -587,6 +712,16 @@
     "confirmDelete": "हटाने की पुष्टि करें",
     "deleteMessage": "क्या आप इस सत्र को हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।",
     "deleteSession": "इस सत्र को हटाएं",
+    "selectMode": "Select",
+    "exitSelectMode": "Exit selection",
+    "selectedSessions": "{{count}} selected",
+    "selectAll": "Select all",
+    "clearSelection": "Clear",
+    "deleteSelected": "Delete selected",
+    "confirmDeleteSelected": "Confirm Delete",
+    "deleteSelectedMessage": "Are you sure you want to delete {{count}} selected sessions? This action cannot be undone.",
+    "selectSession": "Select session",
+    "selectSessionWithTitle": "Select {{title}}",
     "exportSession": "सत्र निर्यात करें",
     "exportSuccess": "सत्र निर्यात किया गया",
     "exportFailed": "निर्यात विफल",
@@ -609,6 +744,9 @@
     "cancelEditButton": "रद्द करें",
     "titleTooLong": "शीर्षक बहुत लंबा (अधिकतम 50 वर्ण)",
     "titleUpdated": "शीर्षक अपडेट किया गया",
+    "copySessionId": "CLI resume के लिए सेशन ID कॉपी करें",
+    "sessionIdCopied": "सेशन ID कॉपी किया गया",
+    "copyFailed": "कॉपी विफल",
     "timeAgo": {
       "yearsAgo": "साल पहले",
       "monthsAgo": "महीने पहले",
@@ -636,7 +774,8 @@
       "WebSearch": "वेब खोज",
       "WebFetch": "वेब प्राप्त करें",
       "execute": "{{toolName}} निष्पादित करें",
-      "readDirectory": "निर्देशिका पढ़ें"
+      "readDirectory": "निर्देशिका पढ़ें",
+      "timeoutWarning": "कृपया जल्द उत्तर दें, डायलॉग {{seconds}} सेकंड में स्वचालित रूप से बंद हो जाएगा"
     }
   },
   "askUserQuestion": {
@@ -692,6 +831,50 @@
     "clickToCopy": "कॉपी करने के लिए क्लिक करें",
     "switch": "स्विच",
     "switchProvider": "प्रदाता स्विच करें",
+    "runtimeProvider": {
+      "title": "वर्तमान प्रदाता बदलें",
+      "loading": "प्रदाता लोड हो रहे हैं...",
+      "empty": "कोई प्रदाता उपलब्ध नहीं",
+      "switched": "{{provider}} पर स्विच किया गया"
+    },
+    "nodeProcesses": {
+      "title": "Node प्रक्रिया प्रबंधक",
+      "badge": "{{total}} प्रक्रियाएं",
+      "badgeWithOrphan": "{{total}} · {{orphan}} अनाथ ⚠",
+      "summary": "कुल: {{total}} · अनाथ: {{orphan}}",
+      "loading": "प्रक्रियाएं लोड हो रही हैं...",
+      "empty": "कोई सक्रिय Node प्रक्रिया नहीं",
+      "refresh": "रीफ्रेश",
+      "groups": {
+        "daemon": "डेमन प्रक्रियाएं",
+        "channel": "सक्रिय बातचीत",
+        "orphan": "अनाथ प्रक्रियाएं"
+      },
+      "kind": {
+        "daemonShort": "Daemon",
+        "channelShort": "चैनल",
+        "orphanShort": "अनाथ"
+      },
+      "kill": "समाप्त",
+      "interrupt": "रोकें",
+      "restart": "पुनः आरंभ",
+      "pending": "प्रसंस्करण...",
+      "killAll": "सभी अनाथ हटाएं ({{count}})",
+      "killHint": "इस Node प्रक्रिया को बलपूर्वक समाप्त करें",
+      "killAllHint": "सभी पहचानी गई अनाथ प्रक्रियाओं को समाप्त करें",
+      "restartHint": "डेमन रोकें; अगला संदेश नया डेमन स्वतः शुरू करेगा",
+      "killConfirmTitle": "इस प्रक्रिया को समाप्त करें?",
+      "killConfirm": "PID {{pid}} समाप्त करें? चालू बातचीत खो सकती है।",
+      "restartConfirmTitle": "डेमन पुनः आरंभ करें?",
+      "restartConfirm": "डेमन पुनः आरंभ करें? सक्रिय बातचीत बाधित होगी।",
+      "killAllConfirmTitle": "सभी अनाथ प्रक्रियाओं को साफ़ करें?",
+      "killAllConfirm": "सभी {{count}} अनाथ प्रक्रियाओं को समाप्त करें?",
+      "killSuccess": "प्रक्रिया समाप्त की गई",
+      "killAllSuccess": "{{count}} अनाथ प्रक्रिया(एं) साफ की गईं",
+      "restartSuccess": "डेमन रोका गया; अगले संदेश पर नया उदाहरण स्वतः शुरू होगा",
+      "killFailed": "समाप्त करने में विफल: {{error}}",
+      "activeRequests": "{{count}} चालू"
+    },
     "link": "लिंक"
   },
   "markdown": {
@@ -1118,37 +1301,63 @@
         "description": "Sonnet 4.6 · डिफ़ॉल्ट अनुशंसित मॉडल"
       },
       "opus46": {
-        "label": "Opus 4.6",
-        "description": "Opus 4.6 · नवीनतम और सबसे सक्षम"
+        "label": "Opus 4.7",
+        "description": "Opus 4.7 · पिछला फ्लैगशिप मॉडल"
       },
       "opus46_1m": {
-        "label": "Opus (1M संदर्भ)",
-        "description": "Opus 4.6 लंबे सत्रों के लिए"
+        "label": "Opus 4.6",
+        "description": "Opus 4.6 · उच्च-प्रदर्शन तर्क मॉडल"
       },
       "haiku45": {
         "label": "Haiku 4.5",
         "description": "Haiku 4.5 · सबसे तेज़, त्वरित उत्तरों के लिए उपयुक्त"
+      },
+      "opus48": {
+        "label": "Opus 4.8",
+        "description": "Opus 4.8 · नवीनतम और सबसे सक्षम"
       }
+    },
+    "longContext": {
+      "label": "1M",
+      "shortLabel": "1M संदर्भ",
+      "tooltipEnabled": "1M संदर्भ चालू/बंद करें",
+      "tooltipDisabled": "Haiku के लिए 1M संदर्भ उपलब्ध नहीं है"
     },
     "codex": {
       "gpt53codex": {
-        "label": "gpt-5.3-codex",
+        "label": "GPT-5.3-Codex",
         "description": "नवीनतम फ्रंटियर एजेंटिक कोडिंग मॉडल, उन्नत क्षमताओं के साथ।"
       },
+      "gpt55": {
+        "label": "GPT-5.5",
+        "description": "और अधिक सक्षम नवीनतम फ्रंटियर मॉडल।"
+      },
       "gpt54": {
-        "label": "gpt-5.4",
+        "label": "GPT-5.4",
         "description": "उन्नत क्षमताओं के साथ नवीनतम फ्रंटियर मॉडल।"
       },
       "gpt52codex": {
-        "label": "gpt-5.2-codex",
-        "description": "नवीनतम फ्रंटियर एजेंटिक कोडिंग मॉडल।"
+        "label": "GPT-5.2-Codex",
+        "description": "फ्रंटियर एजेंटिक कोडिंग मॉडल।"
       },
       "gpt51codexMax": {
-        "label": "gpt-5.1-codex-max",
+        "label": "GPT-5.1-Codex-Max",
         "description": "Codex के लिए अनुकूलित फ्लैगशिप मॉडल, गहरी और तेज़ रीज़निंग।"
       },
+      "gpt54mini": {
+        "label": "GPT-5.4-Mini",
+        "description": "हल्का फ्रंटियर एजेंटिक कोडिंग मॉडल।"
+      },
+      "gpt53codexSpark": {
+        "label": "GPT-5.3-Codex-Spark",
+        "description": "अत्यंत तेज़ कोडिंग मॉडल।"
+      },
+      "gpt52": {
+        "label": "GPT-5.2",
+        "description": "पेशेवर काम और लंबे समय तक चलने वाले एजेंटों के लिए अनुकूलित।"
+      },
       "gpt51codexMini": {
-        "label": "gpt-5.1-codex-mini",
+        "label": "GPT-5.1-Codex-Mini",
         "description": "Codex के लिए अनुकूलित। सस्ता और तेज़, लेकिन कम सक्षम।"
       }
     }
@@ -1202,7 +1411,7 @@
       "label": "Claude Code"
     },
     "codex": {
-      "label": "Codex Cli"
+      "label": "Codex"
     },
     "gemini": {
       "label": "Gemini Cli"
@@ -1328,7 +1537,51 @@
   },
   "error": {
     "providerNotConfigured": "प्रदाता कॉन्फ़िगर नहीं है",
-    "providerNotConfiguredDesc": "अभी तक कोई AI प्रदाता सेट अप नहीं है। बातचीत शुरू करने से पहले कृपया प्रदाता सेटिंग्स में API कुंजी जोड़ें।",
-    "goToProviderSettings": "प्रदाता सेटिंग्स पर जाएं"
+    "providerNotConfiguredDesc": "अभी तक कोई AI प्रदाता कॉन्फ़िगर नहीं किया गया है, या स्थानीय कॉन्फ़िगरेशन के उपयोग की अनुमति नहीं दी गई है। बातचीत शुरू करने से पहले कृपया प्रदाता प्रबंधन सेटिंग्स में सेटअप पूरा करें।",
+    "goToProviderSettings": "सेटिंग्स पर जाएं"
+  },
+  "errorDiagnostic": {
+    "copyCommand": "कॉपी करें",
+    "copied": "कॉपी किया गया",
+    "openDependencySettings": "निर्भरता प्रबंधन खोलें",
+    "recommended": "अनुशंसित",
+    "codexThreadResume": {
+      "title": "सत्र थ्रेड अब मान्य नहीं है",
+      "intro": "नया सत्र बनाने से यह समस्या हल हो जाएगी। वर्तमान सत्र का थ्रेड ID Codex सर्वर पर अब मौजूद नहीं है।",
+      "reason": "Codex कुछ समय बाद पुराने थ्रेड को हटा देता है, जिससे पिछले सत्र को फिर से शुरू करते समय यह त्रुटि हो सकती है।"
+    },
+    "sdkNativeBinaryMissing": {
+      "title": "SDK स्थापना अधूरी — नेटिव बाइनरी अनुपस्थित",
+      "intro": "यह Taobao npm मिरर की एक ज्ञात समस्या है (प्लगइन बग नहीं)। मिरर ने प्लेटफ़ॉर्म-विशिष्ट फ़ाइलों को पूरी तरह सिंक नहीं किया है। आप नीचे दिए गए विकल्पों में से किसी एक से इसे मैन्युअल रूप से हल कर सकते हैं:",
+      "reason": "Taobao मिरर के सिंक पूरा होने पर यह समस्या स्वतः ही गायब हो जाएगी — चिंता की कोई बात नहीं है।",
+      "solutions": {
+        "switchRegistry": {
+          "title": "विकल्प 1: अस्थायी रूप से आधिकारिक रजिस्ट्री पर स्विच करें और पुनः इंस्टॉल करें",
+          "step0": "1. अपने टर्मिनल में चलाएं (आधिकारिक npm रजिस्ट्री पर स्विच करें):",
+          "step1": "2. प्लगइन की निर्भरता प्रबंधन सेटिंग्स खोलें और पुनः इंस्टॉल पर क्लिक करें:",
+          "step2": "3. पुनः इंस्टॉलेशन पूरा होने के बाद, Taobao मिरर पर वापस स्विच करें:"
+        },
+        "downgrade": {
+          "title": "विकल्प 2: पुराने संस्करण पर वापस जाएं",
+          "step0": "निर्भरता प्रबंधन में SDK संस्करण को v0.2.112 या उससे पहले के संस्करण पर स्विच करें। स्विच करने के बाद IDEA को पुनरारंभ करें।"
+        }
+      }
+    },
+    "spawnEbusy": {
+      "title": "spawn EBUSY — चाइल्ड प्रोसेस शुरू करने में विफल",
+      "intro": "यह त्रुटि आमतौर पर असंगत Node.js संस्करण या अधूरी SDK स्थापना के कारण होती है। नीचे दिए गए दो विकल्पों को क्रम में आज़माएँ:",
+      "reason": "EBUSY एक सिस्टम त्रुटि है जो Node.js द्वारा तब उत्पन्न होती है जब किसी चाइल्ड प्रोसेस को व्यस्त संसाधन के कारण शुरू नहीं किया जा सकता। सामान्य कारण: Node.js 24 की संगतता समस्याएँ, पुराना SDK, या Taobao मिरर से अधूरी स्थापना।",
+      "solutions": {
+        "checkNodeVersion": {
+          "title": "विकल्प 1: अपना Node.js संस्करण जाँचें",
+          "step0": "अपना संस्करण देखने के लिए टर्मिनल में नीचे दिया गया कमांड चलाएँ। Node 22 या वर्तमान LTS की अनुशंसा की जाती है — उपयोगकर्ताओं ने Node 24 पर कई समस्याएँ बताई हैं, इसलिए Node 20 या 22 को प्राथमिकता दें:"
+        },
+        "reinstallLatestSdk": {
+          "title": "विकल्प 2: आधिकारिक npm रजिस्ट्री से नवीनतम SDK पुनः इंस्टॉल करें",
+          "step0": "1. आधिकारिक npm रजिस्ट्री पर स्विच करें (Taobao मिरर का उपयोग न करें — हो सकता है उसके पास नवीनतम संस्करण न हो):",
+          "step1": "2. निर्भरता प्रबंधन खोलें और नवीनतम SDK पुनः इंस्टॉल करें:"
+        }
+      }
+    }
   }
 }

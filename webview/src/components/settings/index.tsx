@@ -16,9 +16,11 @@ import CommunitySection from './CommunitySection';
 import AgentSection from './AgentSection';
 import PromptSection from './PromptSection';
 import CommitSection from './CommitSection';
+import PromptEnhancerSection from './PromptEnhancerSection';
 import OtherSettingsSection from './OtherSettingsSection';
 import { SkillsSettingsSection } from '../skills';
 import SettingsDialogs from './SettingsDialogs';
+import { setNewSessionConfirmEnabled as persistNewSessionConfirmEnabled } from '../../utils/skipNewSessionConfirm';
 
 // Import custom hooks
 import {
@@ -33,6 +35,9 @@ import {
 
 import styles from './style.module.less';
 
+const BLOCK_STYLE: React.CSSProperties = { display: 'block' };
+const NONE_STYLE: React.CSSProperties = { display: 'none' };
+
 interface SettingsViewProps {
   onClose: () => void;
   initialTab?: SettingsTab;
@@ -46,6 +51,9 @@ interface SettingsViewProps {
   // Auto open file configuration (passed from App.tsx for state sync)
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  // Permission dialog timeout configuration (passed from App.tsx for state sync)
+  permissionDialogTimeoutSeconds?: number;
+  onPermissionDialogTimeoutChange?: (seconds: number) => void;
 }
 
 const SettingsView = ({
@@ -57,7 +65,9 @@ const SettingsView = ({
   sendShortcut: sendShortcutProp,
   onSendShortcutChange: onSendShortcutChangeProp,
   autoOpenFileEnabled: autoOpenFileEnabledProp,
-  onAutoOpenFileEnabledChange: onAutoOpenFileEnabledChangeProp
+  onAutoOpenFileEnabledChange: onAutoOpenFileEnabledChangeProp,
+  permissionDialogTimeoutSeconds: permissionDialogTimeoutSecondsProp,
+  onPermissionDialogTimeoutChange: onPermissionDialogTimeoutChangeProp,
 }: SettingsViewProps) => {
   const { t } = useTranslation();
   const isCodexMode = currentProvider === 'codex';
@@ -92,6 +102,8 @@ const SettingsView = ({
     setChatBgColor,
     userMsgColor,
     setUserMsgColor,
+    diffTheme,
+    setDiffTheme,
   } = useSettingsThemeSync();
 
   // Basic settings actions: node path, working dir, streaming, shortcuts, sound, commit prompt, etc.
@@ -110,6 +122,10 @@ const SettingsView = ({
     setSavingWorkingDirectory,
     editorFontConfig,
     setEditorFontConfig,
+    uiFontConfig,
+    setUiFontConfig,
+    codeFontConfig,
+    setCodeFontConfig,
     setLocalStreamingEnabled,
     streamingEnabled,
     codexSandboxMode,
@@ -117,6 +133,8 @@ const SettingsView = ({
     setLocalSendShortcut,
     sendShortcut,
     autoOpenFileEnabled,
+    promptEnhancerConfig,
+    setPromptEnhancerConfig,
     commitPrompt,
     setCommitPrompt,
     savingCommitPrompt,
@@ -133,8 +151,16 @@ const SettingsView = ({
     setDiffExpandedByDefault,
     historyCompletionEnabled,
     setHistoryCompletionEnabled,
+    skipNewSessionConfirm,
+    setSkipNewSessionConfirm,
     handleSaveNodePath,
     handleSaveWorkingDirectory,
+    handleUiFontSelectionChange,
+    handleSaveUiFontCustomPath,
+    handleBrowseUiFontFile,
+    handleCodeFontSelectionChange,
+    handleSaveCodeFontCustomPath,
+    handleBrowseCodeFontFile,
     handleStreamingEnabledChange,
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
@@ -147,6 +173,33 @@ const SettingsView = ({
     handleTestSound,
     handleBrowseSound,
     handleSaveCommitPrompt,
+    projectCommitPrompt,
+    setProjectCommitPrompt,
+    savingProjectCommitPrompt,
+    setSavingProjectCommitPrompt,
+    handleSaveProjectCommitPrompt,
+    commitGenerationEnabled,
+    setCommitGenerationEnabled,
+    handleCommitGenerationEnabledChange,
+    aiTitleGenerationEnabled,
+    setAiTitleGenerationEnabled,
+    handleAiTitleGenerationEnabledChange,
+    statusBarWidgetEnabled,
+    setStatusBarWidgetEnabled,
+    handleStatusBarWidgetEnabledChange,
+    taskCompletionNotificationEnabled,
+    setTaskCompletionNotificationEnabled,
+    handleTaskCompletionNotificationEnabledChange,
+    permissionDialogTimeoutSeconds,
+    handlePermissionDialogTimeoutChange,
+    commitAiConfig,
+    setCommitAiConfig,
+    handleCommitAiProviderChange,
+    handleCommitAiModelChange,
+    handleCommitAiResetToDefault,
+    handlePromptEnhancerProviderChange,
+    handlePromptEnhancerModelChange,
+    handlePromptEnhancerResetToDefault,
   } = useSettingsBasicActions({
     streamingEnabledProp,
     onStreamingEnabledChangeProp,
@@ -154,6 +207,8 @@ const SettingsView = ({
     onSendShortcutChangeProp,
     autoOpenFileEnabledProp,
     onAutoOpenFileEnabledChangeProp,
+    permissionDialogTimeoutSecondsProp,
+    onPermissionDialogTimeoutChangeProp,
   });
 
   // Use provider management hook
@@ -194,6 +249,7 @@ const SettingsView = ({
     handleCloseCodexProviderDialog,
     handleSaveCodexProvider,
     handleSwitchCodexProvider,
+    handleRevokeCodexLocalConfigAuthorization,
     handleDeleteCodexProvider,
     confirmDeleteCodexProvider,
     cancelDeleteCodexProvider,
@@ -246,7 +302,13 @@ const SettingsView = ({
     setSavingWorkingDirectory,
     setCommitPrompt,
     setSavingCommitPrompt,
+    setCommitAiConfig,
+    setPromptEnhancerConfig,
+    setProjectCommitPrompt,
+    setSavingProjectCommitPrompt,
     setEditorFontConfig,
+    setUiFontConfig,
+    setCodeFontConfig,
     setIdeTheme,
     setLocalStreamingEnabled,
     setCodexSandboxMode,
@@ -276,6 +338,10 @@ const SettingsView = ({
     setSoundOnlyWhenUnfocused,
     setSelectedSound,
     setCustomSoundPath,
+    setCommitGenerationEnabled,
+    setAiTitleGenerationEnabled,
+    setStatusBarWidgetEnabled,
+    setTaskCompletionNotificationEnabled,
   });
 
   // Save provider (wrapper function with validation logic)
@@ -381,7 +447,7 @@ const SettingsView = ({
         {/* Content area */}
         <div className={`${styles.settingsContent} ${currentTab === 'providers' ? styles.providerSettingsContent : ''}`}>
           {/* Basic configuration */}
-          <div style={{ display: currentTab === 'basic' ? 'block' : 'none' }}>
+          <div style={currentTab === 'basic' ? BLOCK_STYLE : NONE_STYLE}>
             <BasicConfigSection
               theme={themePreference}
               onThemeChange={setThemePreference}
@@ -398,6 +464,14 @@ const SettingsView = ({
               onSaveWorkingDirectory={handleSaveWorkingDirectory}
               savingWorkingDirectory={savingWorkingDirectory}
               editorFontConfig={editorFontConfig}
+              uiFontConfig={uiFontConfig}
+              codeFontConfig={codeFontConfig}
+              onUiFontSelectionChange={handleUiFontSelectionChange}
+              onSaveUiFontCustomPath={handleSaveUiFontCustomPath}
+              onBrowseUiFontFile={handleBrowseUiFontFile}
+              onCodeFontSelectionChange={handleCodeFontSelectionChange}
+              onSaveCodeFontCustomPath={handleSaveCodeFontCustomPath}
+              onBrowseCodeFontFile={handleBrowseCodeFontFile}
               streamingEnabled={streamingEnabled}
               onStreamingEnabledChange={handleStreamingEnabledChange}
               sendShortcut={sendShortcut}
@@ -408,8 +482,30 @@ const SettingsView = ({
               onChatBgColorChange={setChatBgColor}
               userMsgColor={userMsgColor}
               onUserMsgColorChange={setUserMsgColor}
+              diffTheme={diffTheme}
+              onDiffThemeChange={setDiffTheme}
               diffExpandedByDefault={diffExpandedByDefault}
               onDiffExpandedByDefaultChange={setDiffExpandedByDefault}
+              commitGenerationEnabled={commitGenerationEnabled}
+              onCommitGenerationEnabledChange={(enabled) => {
+                handleCommitGenerationEnabledChange(enabled);
+                addToast(t('toast.restartRequired'), 'warning');
+              }}
+              statusBarWidgetEnabled={statusBarWidgetEnabled}
+              onStatusBarWidgetEnabledChange={(enabled) => {
+                handleStatusBarWidgetEnabledChange(enabled);
+                addToast(t('toast.restartRequired'), 'warning');
+              }}
+              aiTitleGenerationEnabled={aiTitleGenerationEnabled}
+              onAiTitleGenerationEnabledChange={handleAiTitleGenerationEnabledChange}
+              newSessionConfirmEnabled={!skipNewSessionConfirm}
+              onNewSessionConfirmEnabledChange={(enabled) => {
+                // Optimistic local update so the toggle reflects instantly even if
+                // the CustomEvent loops back. persistNewSessionConfirmEnabled writes
+                // to localStorage and dispatches the sync event for other surfaces.
+                setSkipNewSessionConfirm(!enabled);
+                persistNewSessionConfirmEnabled(enabled);
+              }}
               soundNotificationEnabled={soundNotificationEnabled}
               onSoundNotificationEnabledChange={handleSoundNotificationEnabledChange}
               soundOnlyWhenUnfocused={soundOnlyWhenUnfocused}
@@ -421,11 +517,15 @@ const SettingsView = ({
               onSaveCustomSoundPath={handleSaveCustomSoundPath}
               onTestSound={handleTestSound}
               onBrowseSound={handleBrowseSound}
+              taskCompletionNotificationEnabled={taskCompletionNotificationEnabled}
+              onTaskCompletionNotificationEnabledChange={handleTaskCompletionNotificationEnabledChange}
+              permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
+              onPermissionDialogTimeoutChange={handlePermissionDialogTimeoutChange}
             />
           </div>
 
           {/* Provider management (Claude + Codex internal tab switching) */}
-          <div style={{ display: currentTab === 'providers' ? 'block' : 'none' }}>
+          <div style={currentTab === 'providers' ? BLOCK_STYLE : NONE_STYLE}>
             <ProviderTabSection
               currentProvider={currentProvider}
               providers={providers}
@@ -437,30 +537,31 @@ const SettingsView = ({
               codexProviders={codexProviders}
               codexLoading={codexLoading}
               onAddCodexProvider={handleAddCodexProvider}
-              onEditCodexProvider={handleEditCodexProvider}
-              onDeleteCodexProvider={handleDeleteCodexProvider}
-              onSwitchCodexProvider={handleSwitchCodexProvider}
-              addToast={addToast}
-            />
+                onEditCodexProvider={handleEditCodexProvider}
+                onDeleteCodexProvider={handleDeleteCodexProvider}
+                onSwitchCodexProvider={handleSwitchCodexProvider}
+                onRevokeCodexLocalConfigAuthorization={handleRevokeCodexLocalConfigAuthorization}
+                addToast={addToast}
+              />
           </div>
 
           {/* SDK dependency management */}
-          <div style={{ display: currentTab === 'dependencies' ? 'block' : 'none' }}>
+          <div style={currentTab === 'dependencies' ? BLOCK_STYLE : NONE_STYLE}>
             <DependencySection addToast={addToast} isActive={currentTab === 'dependencies'} />
           </div>
 
           {/* Usage statistics */}
-          <div style={{ display: currentTab === 'usage' ? 'block' : 'none' }}>
+          <div style={currentTab === 'usage' ? BLOCK_STYLE : NONE_STYLE}>
             <UsageSection currentProvider={currentProvider} />
           </div>
 
           {/* MCP servers */}
-          <div style={{ display: currentTab === 'mcp' ? 'block' : 'none' }}>
+          <div style={currentTab === 'mcp' ? BLOCK_STYLE : NONE_STYLE}>
             <PlaceholderSection type="mcp" currentProvider={currentProvider} />
           </div>
 
           {/* Permissions configuration */}
-          <div style={{ display: currentTab === 'permissions' ? 'block' : 'none' }}>
+          <div style={currentTab === 'permissions' ? BLOCK_STYLE : NONE_STYLE}>
             {currentProvider === 'codex' ? (
               <PermissionsSection
                 codexSandboxMode={codexSandboxMode}
@@ -471,18 +572,36 @@ const SettingsView = ({
             )}
           </div>
 
+          {/* Prompt enhancer configuration */}
+          <div style={currentTab === 'promptEnhancer' ? BLOCK_STYLE : NONE_STYLE}>
+            <PromptEnhancerSection
+              promptEnhancerConfig={promptEnhancerConfig}
+              onPromptEnhancerProviderChange={handlePromptEnhancerProviderChange}
+              onPromptEnhancerModelChange={handlePromptEnhancerModelChange}
+              onPromptEnhancerResetToDefault={handlePromptEnhancerResetToDefault}
+            />
+          </div>
+
           {/* Commit AI configuration */}
-          <div style={{ display: currentTab === 'commit' ? 'block' : 'none' }}>
+          <div style={currentTab === 'commit' ? BLOCK_STYLE : NONE_STYLE}>
             <CommitSection
+              commitAiConfig={commitAiConfig}
+              onCommitAiProviderChange={handleCommitAiProviderChange}
+              onCommitAiModelChange={handleCommitAiModelChange}
+              onCommitAiResetToDefault={handleCommitAiResetToDefault}
               commitPrompt={commitPrompt}
+              projectCommitPrompt={projectCommitPrompt}
               onCommitPromptChange={setCommitPrompt}
+              onProjectCommitPromptChange={setProjectCommitPrompt}
               onSaveCommitPrompt={handleSaveCommitPrompt}
+              onSaveProjectCommitPrompt={handleSaveProjectCommitPrompt}
               savingCommitPrompt={savingCommitPrompt}
+              savingProjectCommitPrompt={savingProjectCommitPrompt}
             />
           </div>
 
           {/* Agents */}
-          <div style={{ display: currentTab === 'agents' ? 'block' : 'none' }}>
+          <div style={currentTab === 'agents' ? BLOCK_STYLE : NONE_STYLE}>
             <AgentSection
               agents={agents}
               loading={agentsLoading}
@@ -495,19 +614,19 @@ const SettingsView = ({
           </div>
 
           {/* Prompts */}
-          <div style={{ display: currentTab === 'prompts' ? 'block' : 'none' }}>
+          <div style={currentTab === 'prompts' ? BLOCK_STYLE : NONE_STYLE}>
             <PromptSection
               onSuccess={(msg) => addToast(msg, 'success')}
             />
           </div>
 
           {/* Skills */}
-          <div style={{ display: currentTab === 'skills' ? 'block' : 'none' }}>
+          <div style={currentTab === 'skills' ? BLOCK_STYLE : NONE_STYLE}>
             <SkillsSettingsSection currentProvider={currentProvider} />
           </div>
 
           {/* Other settings */}
-          <div style={{ display: currentTab === 'other' ? 'block' : 'none' }}>
+          <div style={currentTab === 'other' ? BLOCK_STYLE : NONE_STYLE}>
             <OtherSettingsSection
               historyCompletionEnabled={historyCompletionEnabled}
               onHistoryCompletionEnabledChange={(enabled) => {
@@ -520,7 +639,7 @@ const SettingsView = ({
           </div>
 
           {/* Community */}
-          <div style={{ display: currentTab === 'community' ? 'block' : 'none' }}>
+          <div style={currentTab === 'community' ? BLOCK_STYLE : NONE_STYLE}>
             <CommunitySection addToast={addToast} />
           </div>
         </div>

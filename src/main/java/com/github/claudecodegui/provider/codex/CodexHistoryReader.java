@@ -1,5 +1,6 @@
 package com.github.claudecodegui.provider.codex;
 
+import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -52,6 +53,7 @@ public class CodexHistoryReader {
         public long lastTimestamp;
         public long firstTimestamp;
         public String cwd;
+        public long fileSize;
     }
 
     /**
@@ -154,6 +156,7 @@ public class CodexHistoryReader {
      * Uses memory cache and file index for performance optimization.
      */
     public List<SessionInfo> readAllSessions() throws IOException {
+        logSessionAccessWithoutLocalConfigAuthorization();
         return indexService.readAllSessions();
     }
 
@@ -257,6 +260,7 @@ public class CodexHistoryReader {
     }
 
     public String getSessionMessagesAsJson(String sessionId) {
+        logSessionAccessWithoutLocalConfigAuthorization();
         return sessionService.getSessionMessagesAsJson(sessionId);
     }
 
@@ -268,6 +272,26 @@ public class CodexHistoryReader {
      * @param cutoffTime  earliest timestamp (ms) to include; 0 means no cutoff (all time)
      */
     public ProjectStatistics getProjectStatistics(String projectPath, long cutoffTime) {
+        logSessionAccessWithoutLocalConfigAuthorization();
         return usageAggregator.getProjectStatistics(projectPath, cutoffTime);
+    }
+
+    /**
+     * Codex session history lives under ~/.codex/sessions and does not require
+     * permission to read ~/.codex/config.toml or auth.json.
+     */
+    private void logSessionAccessWithoutLocalConfigAuthorization() {
+        if (!isCodexLocalConfigAuthorized()) {
+            LOG.debug("[CodexHistoryReader] Reading ~/.codex/sessions without local config authorization");
+        }
+    }
+
+    boolean isCodexLocalConfigAuthorized() {
+        try {
+            return new CodemossSettingsService().isCodexLocalConfigAuthorized();
+        } catch (Exception e) {
+            LOG.warn("[CodexHistoryReader] Failed to read Codex local authorization state: " + e.getMessage());
+            return false;
+        }
     }
 }

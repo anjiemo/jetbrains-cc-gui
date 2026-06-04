@@ -24,16 +24,23 @@ public class ModelProviderHandler {
 
     static final Map<String, Integer> MODEL_CONTEXT_LIMITS = new HashMap<>();
     static {
-        // Claude models
+        // Claude models with 1M context (base IDs)
         MODEL_CONTEXT_LIMITS.put("claude-sonnet-4-6", 200_000);
+        MODEL_CONTEXT_LIMITS.put("claude-opus-4-8", 200_000);
+        MODEL_CONTEXT_LIMITS.put("claude-opus-4-7", 200_000);
         MODEL_CONTEXT_LIMITS.put("claude-opus-4-6", 200_000);
+        // Claude models with [1m] suffix - 1M context
+        MODEL_CONTEXT_LIMITS.put("claude-sonnet-4-6[1m]", 1_000_000);
+        MODEL_CONTEXT_LIMITS.put("claude-opus-4-8[1m]", 1_000_000);
+        MODEL_CONTEXT_LIMITS.put("claude-opus-4-7[1m]", 1_000_000);
+        MODEL_CONTEXT_LIMITS.put("claude-opus-4-6[1m]", 1_000_000);
+        // Haiku - no 1M context available
         MODEL_CONTEXT_LIMITS.put("claude-haiku-4-5", 200_000);
-        // Codex/OpenAI models
+        // Codex/GPT models
         MODEL_CONTEXT_LIMITS.put("gpt-5.4", 1_000_000);
+        MODEL_CONTEXT_LIMITS.put("gpt-5.4-mini", 400_000);
         MODEL_CONTEXT_LIMITS.put("gpt-5.3-codex", 258_000);
         MODEL_CONTEXT_LIMITS.put("gpt-5.2-codex", 258_000);
-        MODEL_CONTEXT_LIMITS.put("gpt-5.1-codex-max", 258_000);
-        MODEL_CONTEXT_LIMITS.put("gpt-5.1-codex-mini", 258_000);
         MODEL_CONTEXT_LIMITS.put("gpt-5.2", 258_000);
         MODEL_CONTEXT_LIMITS.put("gpt-5.1", 128_000);
         MODEL_CONTEXT_LIMITS.put("gpt-5.1-codex", 128_000);
@@ -57,15 +64,6 @@ public class ModelProviderHandler {
         this.usagePushService = usagePushService;
     }
 
-    /**
-     * Handle set model request.
-     * Sends a confirmation callback to the frontend after setting, ensuring frontend-backend state sync.
-     *
-     * The session always stores the frontend-selected canonical model ID (e.g. claude-sonnet-4-6).
-     * Runtime model remapping is deferred to the bridge layer so the SDK keeps the correct
-     * model family (sonnet/opus/haiku) semantics. We only resolve the mapped model here when
-     * estimating context length for suffix-based capacities such as "[1M]".
-     */
     public void handleSetModel(String content) {
         try {
             String model = content;
@@ -81,9 +79,6 @@ public class ModelProviderHandler {
             }
 
             LOG.info("[ModelProviderHandler] Setting model to: " + model);
-
-            // Keep the canonical model ID in Java session state. The Node bridge will resolve
-            // provider-specific model mappings from ~/.claude/settings.json at send time.
             context.setCurrentModel(model);
 
             if (context.getSession() != null) {
@@ -91,25 +86,18 @@ public class ModelProviderHandler {
                 LOG.info("[ModelProviderHandler] Updated session model to canonical ID: " + model);
             }
 
-            // Update status bar with basic model name
             com.github.claudecodegui.notifications.ClaudeNotifier.setModel(context.getProject(), model);
 
-            // Calculate the context limit using the runtime-resolved model when available so
-            // custom capacity suffixes (for example "[1M]") still show the correct quota.
             String resolvedModelForUsage = resolveConfiguredClaudeModelFromSettings(model);
             int newMaxTokens = getModelContextLimit(resolvedModelForUsage);
             LOG.info("[ModelProviderHandler] Model context limit: " + newMaxTokens
                     + " tokens for selected model: " + model
                     + ", resolved model: " + resolvedModelForUsage);
 
-            // Send confirmation callback to frontend, ensuring frontend-backend state sync
             final String confirmedModel = model;
             final String confirmedProvider = context.getCurrentProvider();
             ApplicationManager.getApplication().invokeLater(() -> {
-                // Send model confirmation
                 context.callJavaScript("window.onModelConfirmed", context.escapeJs(confirmedModel), context.escapeJs(confirmedProvider));
-
-                // Recalculate and push usage update, ensuring maxTokens is updated for the new model
                 usagePushService.pushUsageUpdateAfterModelChange(newMaxTokens);
             });
         } catch (Exception e) {
@@ -117,9 +105,6 @@ public class ModelProviderHandler {
         }
     }
 
-    /**
-     * Handle set provider request.
-     */
     public void handleSetProvider(String content) {
         try {
             String provider = content;
@@ -134,16 +119,29 @@ public class ModelProviderHandler {
                 }
             }
 
-            LOG.info("[ModelProviderHandler] Setting provider to: " + provider);
+            // Capture previous provider BEFORE mutating context so we can detect
+            // the leave-claude transition that needs daemon cleanup.
+            String previousProvider = context.getCurrentProvider();
+            LOG.info("[ModelProviderHandler] Setting provider to: " + provider
+                    + " (was: " + previousProvider + ")");
             context.setCurrentProvider(provider);
 
             if (context.getSession() != null) {
                 context.getSession().setProvider(provider);
             }
 
-            // Refresh slash commands for the new provider
-            refreshSlashCommandsForProvider(provider);
+            // Bug fix (Node process leak L2): when the tab moves AWAY from Claude
+            // to another SDK family (currently only Codex), the lingering Claude
+            // daemon would otherwise stay alive for the rest of the tab's lifetime.
+            // The daemon caches process.env, so even if the user comes back to
+            // Claude with refreshed credentials, the cached env would persist —
+            // shutting it down here forces the next Claude message to spawn a
+            // fresh daemon. The daemon restart on return is lazy (deferred to
+            // the next claude.send call), so users pay ~5–10s only when they
+            // actually send the next Claude message.
+            shutdownStaleClaudeDaemonIfLeavingClaude(previousProvider, provider);
 
+            refreshSlashCommandsForProvider(provider);
             usagePushService.refreshContextBar();
         } catch (Exception e) {
             LOG.error("[ModelProviderHandler] Failed to set provider: " + e.getMessage(), e);
@@ -151,8 +149,58 @@ public class ModelProviderHandler {
     }
 
     /**
-     * Handle set reasoning effort request (Codex only).
+     * Pure decision predicate: should we shut down the Claude daemon when the
+     * tab provider transitions from {@code previousProvider} to {@code newProvider}?
+     *
+     * <p>Returns true only on Claude → non-Claude transitions. Same-direction
+     * reaffirmations (e.g. {@code set_provider("codex")} fired again on every
+     * message send) must not restart the daemon, and Claude → Claude
+     * reaffirmations must keep the warm daemon alive.
+     *
+     * <p>Package-private so unit tests can verify the full transition matrix
+     * without spinning up a HandlerContext or ClaudeSDKBridge.
      */
+    static boolean shouldShutdownClaudeDaemonOnProviderSwitch(String previousProvider, String newProvider) {
+        if (!"claude".equals(previousProvider)) {
+            return false;
+        }
+        // Empty/null newProvider means "not set yet" (initialization, race), NOT
+        // "user moved away from Claude". Treating it as a leave-claude transition
+        // would cause spurious daemon restarts (~5–10s) when set_provider arrives
+        // before the tab has fully booted.
+        if (newProvider == null || newProvider.isEmpty() || "claude".equals(newProvider)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Shut down the Claude daemon when leaving the Claude family.
+     * Delegates the decision to {@link #shouldShutdownClaudeDaemonOnProviderSwitch}
+     * and only performs the side effect (calling
+     * {@link com.github.claudecodegui.provider.claude.ClaudeSDKBridge#shutdownDaemon()})
+     * when the decision says yes and the bridge is present.
+     *
+     * @return true when shutdown was actually invoked
+     */
+    boolean shutdownStaleClaudeDaemonIfLeavingClaude(String previousProvider, String newProvider) {
+        if (!shouldShutdownClaudeDaemonOnProviderSwitch(previousProvider, newProvider)) {
+            return false;
+        }
+        if (context.getClaudeSDKBridge() == null) {
+            return false;
+        }
+        try {
+            context.getClaudeSDKBridge().shutdownDaemon();
+            LOG.info("[ModelProviderHandler] Shut down Claude daemon after switching to: " + newProvider);
+            return true;
+        } catch (Exception e) {
+            LOG.warn("[ModelProviderHandler] Failed to shut down Claude daemon on provider switch: "
+                    + e.getMessage(), e);
+            return false;
+        }
+    }
+
     public void handleSetReasoningEffort(String content) {
         try {
             String effort = content;
@@ -177,9 +225,6 @@ public class ModelProviderHandler {
         }
     }
 
-    /**
-     * Refreshes slash commands after provider switch using local registry.
-     */
     private void refreshSlashCommandsForProvider(String provider) {
         String cwd = null;
         if (context.getSession() != null) {
@@ -207,8 +252,6 @@ public class ModelProviderHandler {
             ApplicationManager.getApplication().invokeLater(() -> {
                 try {
                     context.callJavaScript("updateSlashCommands", context.escapeJs(json));
-
-                    // Push Codex $ skills when switching to codex provider
                     if (codexJson != null) {
                         context.callJavaScript("window.updateDollarCommands", context.escapeJs(codexJson));
                     }
@@ -222,14 +265,6 @@ public class ModelProviderHandler {
         });
     }
 
-    /**
-     * Resolve the actual model name used from settings.
-     * Mirrors the bridge-side mapping rules so context limit calculation stays in sync with
-     * the runtime request path without mutating the selected model stored in session state.
-     *
-     * @param baseModel the base model ID selected by frontend (e.g. claude-sonnet-4-6, claude-haiku-4-5)
-     * @return the resolved runtime model configured in settings, or the original model when no mapping applies
-     */
     private String resolveConfiguredClaudeModelFromSettings(String baseModel) {
         try {
             JsonObject claudeSettings = context.getSettingsService().readClaudeSettings();
@@ -244,7 +279,6 @@ public class ModelProviderHandler {
         return baseModel;
     }
 
-    // Visible for testing
     static String resolveConfiguredClaudeModel(String baseModel, JsonObject env) {
         if (baseModel == null || baseModel.isEmpty() || env == null) {
             return baseModel;
@@ -255,9 +289,6 @@ public class ModelProviderHandler {
             return mainModel;
         }
 
-        // Only apply family-specific mapping when the base model is a Claude model
-        // to avoid accidentally remapping third-party model IDs that happen to contain
-        // a Claude family keyword (e.g. "my-opus-variant").
         String lowerBaseModel = baseModel.toLowerCase();
         boolean isClaudeModel = lowerBaseModel.startsWith("claude-") || lowerBaseModel.startsWith("claude_");
         if (!isClaudeModel) {
@@ -294,21 +325,11 @@ public class ModelProviderHandler {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
-    /**
-     * Get model context limit.
-     * Supports parsing capacity suffix from model name, for example:
-     * - claude-sonnet-4-6[1M] -> 1,000,000 tokens
-     * - claude-opus-4-6[2M] -> 2,000,000 tokens
-     * - claude-haiku-4-5[500k] -> 500,000 tokens
-     * - claude-sonnet-4-6 [1.5M] -> 1,500,000 tokens (supports spaces and decimals)
-     * - Case insensitive (1m and 1M both work)
-     */
     public static int getModelContextLimit(String model) {
         if (model == null || model.isEmpty()) {
             return 200_000;
         }
 
-        // Regex: matches trailing [number+unit], supports optional spaces, decimals, case insensitive
         java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\s*\\[([0-9.]+)([kKmM])\\]\\s*$");
         java.util.regex.Matcher matcher = pattern.matcher(model);
 
@@ -327,7 +348,6 @@ public class ModelProviderHandler {
             }
         }
 
-        // If no capacity suffix, try to look up from predefined mapping
         return MODEL_CONTEXT_LIMITS.getOrDefault(model, 200_000);
     }
 }

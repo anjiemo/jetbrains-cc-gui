@@ -7,6 +7,7 @@
  */
 
 import type { MutableRefObject } from 'react';
+import { forceWebviewRepaint } from '../../utils/forceWebviewRepaint';
 
 export interface ResetTransientUiStateOptions {
   clearToasts: () => void;
@@ -21,14 +22,10 @@ export interface ResetTransientUiStateOptions {
   useBackendStreamingRenderRef: MutableRefObject<boolean>;
   streamingMessageIndexRef: MutableRefObject<number>;
   streamingContentRef: MutableRefObject<string>;
-  streamingTextSegmentsRef: MutableRefObject<string[]>;
-  activeTextSegmentIndexRef: MutableRefObject<number>;
-  streamingThinkingSegmentsRef: MutableRefObject<string[]>;
-  activeThinkingSegmentIndexRef: MutableRefObject<number>;
-  seenToolUseCountRef: MutableRefObject<number>;
+  streamingThinkingRef: MutableRefObject<string>;
   autoExpandedThinkingKeysRef: MutableRefObject<Set<string>>;
-  contentUpdateTimeoutRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
-  thinkingUpdateTimeoutRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
+  contentUpdateTimeoutRef: MutableRefObject<number | null>;
+  thinkingUpdateTimeoutRef: MutableRefObject<number | null>;
 
   // Turn tracking ref (for streaming assistant isolation)
   streamingTurnIdRef: MutableRefObject<number>;
@@ -51,25 +48,26 @@ export const buildResetTransientUiState = (opts: ResetTransientUiStateOptions) =
     opts.useBackendStreamingRenderRef.current = false;
     opts.streamingMessageIndexRef.current = -1;
     opts.streamingContentRef.current = '';
-    opts.streamingTextSegmentsRef.current = [];
-    opts.activeTextSegmentIndexRef.current = -1;
-    opts.streamingThinkingSegmentsRef.current = [];
-    opts.activeThinkingSegmentIndexRef.current = -1;
-    opts.seenToolUseCountRef.current = 0;
+    opts.streamingThinkingRef.current = '';
     opts.autoExpandedThinkingKeysRef.current.clear();
     // Reset active turn ID to prevent stale streaming assistant recovery.
     // NOTE: turnIdCounterRef is intentionally NOT reset — it must stay monotonically
     // increasing across sessions so that stale messages from an old session can never
     // collide with a new session's turn IDs (and React keys like "turn-N" stay unique).
     opts.streamingTurnIdRef.current = -1;
-    if (opts.contentUpdateTimeoutRef.current) {
-      clearTimeout(opts.contentUpdateTimeoutRef.current);
+    // Clear stream-end idempotency guard to avoid stale state across sessions.
+    window.__streamEndProcessedTurnId = undefined;
+    if (opts.contentUpdateTimeoutRef.current != null) {
+      cancelAnimationFrame(opts.contentUpdateTimeoutRef.current);
       opts.contentUpdateTimeoutRef.current = null;
     }
-    if (opts.thinkingUpdateTimeoutRef.current) {
-      clearTimeout(opts.thinkingUpdateTimeoutRef.current);
+    if (opts.thinkingUpdateTimeoutRef.current != null) {
+      cancelAnimationFrame(opts.thinkingUpdateTimeoutRef.current);
       opts.thinkingUpdateTimeoutRef.current = null;
     }
+    // Clear JCEF native-rendering ghosting left by the outgoing session's overlays
+    // and input-box content after the transition unmounts/reflows them.
+    forceWebviewRepaint('session-transition');
   };
 };
 

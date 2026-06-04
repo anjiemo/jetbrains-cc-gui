@@ -8,6 +8,7 @@ import com.github.claudecodegui.handler.PermissionHandler;
 import com.github.claudecodegui.permission.PermissionService;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
+import com.github.claudecodegui.provider.common.DaemonBridge;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.session.SessionCallbackAdapter;
@@ -15,6 +16,7 @@ import com.github.claudecodegui.session.SessionLifecycleManager;
 import com.github.claudecodegui.session.SessionLoadService;
 import com.github.claudecodegui.session.StreamMessageCoalescer;
 import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.github.claudecodegui.settings.TabStateService;
 import com.github.claudecodegui.ui.ChatWindowDelegate;
 import com.github.claudecodegui.ui.EditorContextTracker;
 import com.github.claudecodegui.ui.WebviewInitializer;
@@ -27,11 +29,14 @@ import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.ui.content.Content;
+import com.intellij.ui.content.ContentManager;
 import com.intellij.ui.jcef.JBCefBrowser;
 
 import javax.swing.*;
 import java.awt.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Chat window instance. Coordinates UI components, session management,
@@ -61,6 +66,10 @@ public class ClaudeChatWindow {
     private volatile boolean initialized = false;
     private volatile boolean frontendReady = false;
     private volatile boolean slashCommandsFetched = false;
+    private final AtomicBoolean restoredHistoryLoadStarted = new AtomicBoolean(false);
+
+    // Daemon event listener for AI title forwarding. Held so it can be removed on dispose.
+    private DaemonBridge.DaemonEventListener titleEventListener;
     private volatile int fetchedSlashCommandsCount = 0;
 
     private HandlerContext handlerContext;
@@ -87,31 +96,8 @@ public class ClaudeChatWindow {
         this.htmlLoader = new HtmlLoader(getClass());
         this.mainPanel = new JPanel(new BorderLayout());
 
-        // Set mainPanel background color to prevent white flash on cold start
         this.mainPanel.setBackground(com.github.claudecodegui.util.ThemeConfigService.getBackgroundColor());
 
-        // Initialize webview watchdog (recreateWebview callback is lazy via webviewInitializer field)
-        this.webviewWatchdog = new WebviewWatchdog(
-                mainPanel,
-                () -> browser,
-                htmlLoader,
-                () -> webviewInitializer.recreateWebview("watchdog_recreate"),
-                () -> disposed
-        );
-
-        // Initialize session
-        this.session = new ClaudeSession(project, claudeSDKBridge, codexSDKBridge);
-
-        // Create ChatWindowDelegate for init and runtime operations
-        this.chatWindowDelegate = new ChatWindowDelegate(createDelegateHost());
-        chatWindowDelegate.loadPermissionModeFromSettings();
-        chatWindowDelegate.loadNodePathFromSettings();
-        chatWindowDelegate.syncActiveProvider();
-        chatWindowDelegate.initializeHandlers();
-        // setupPermissionService after initializeHandlers (permissionHandler must exist)
-        this.sessionId = chatWindowDelegate.setupPermissionService();
-
-        // Initialize stream message coalescer
         this.streamCoalescer = new StreamMessageCoalescer(new StreamMessageCoalescer.JsCallbackTarget() {
             @Override
             public void callJavaScript(String functionName, String... args) {
@@ -134,7 +120,24 @@ public class ClaudeChatWindow {
             }
         });
 
-        // Initialize session lifecycle manager
+        this.webviewWatchdog = new WebviewWatchdog(
+                mainPanel,
+                () -> browser,
+                htmlLoader,
+                () -> webviewInitializer.recreateWebview("watchdog_recreate"),
+                () -> disposed,
+                () -> streamCoalescer.isStreamActive()
+        );
+
+        this.session = new ClaudeSession(project, claudeSDKBridge, codexSDKBridge);
+
+        this.chatWindowDelegate = new ChatWindowDelegate(createDelegateHost());
+        chatWindowDelegate.loadPermissionModeFromSettings();
+        chatWindowDelegate.loadNodePathFromSettings();
+        chatWindowDelegate.syncActiveProvider();
+        chatWindowDelegate.initializeHandlers();
+        this.sessionId = chatWindowDelegate.setupPermissionService();
+
         this.sessionLifecycleManager = new SessionLifecycleManager(new SessionLifecycleManager.SessionHost() {
             @Override
             public Project getProject() {
@@ -159,6 +162,7 @@ public class ClaudeChatWindow {
             @Override
             public void setSession(ClaudeSession s) {
                 session = s;
+                persistTabSessionState();
             }
 
             @Override
@@ -226,7 +230,6 @@ public class ClaudeChatWindow {
             }
         });
 
-        // Initialize editor context tracker
         this.editorContextTracker = new EditorContextTracker(project, new EditorContextTracker.ContextCallback() {
             @Override
             public void addSelectionInfo(String info) {
@@ -240,22 +243,20 @@ public class ClaudeChatWindow {
         });
         editorContextTracker.registerListeners();
 
-        // Create webview initializer
         this.webviewInitializer = new WebviewInitializer(createWebviewHost());
 
         setupSessionCallbacks();
         initializeSessionInfo();
-        webviewInitializer.overrideBridgePathIfAvailable();
 
         // Delay JCEF browser creation to avoid service initialization conflicts
         // during JBCefApp$Holder class init (ProxyMigrationService dependency).
         // Operations that depend on browser readiness are also deferred.
-        ApplicationManager.getApplication().invokeLater(() -> {
-            if (!disposed) {
-                webviewInitializer.createUIComponents();
+        ToolWindowManager.getInstance(this.project).invokeLater(() -> {
+            if (!this.disposed) {
+                this.webviewInitializer.createUIComponents();
                 registerSessionLoadListener();
                 this.initialized = true;
-                LOG.info("Window instance fully initialized, project: " + project.getName());
+                LOG.info("Window instance fully initialized, project: " + this.project.getName());
             }
         });
 
@@ -263,15 +264,12 @@ public class ClaudeChatWindow {
             registerInstance();
         }
         chatWindowDelegate.initializeStatusBar();
-
-        // Sync IDEA keymap for ChatSendAction based on current sendShortcut setting
         SendShortcutSync.syncFromSettings();
     }
 
     // ==================== Public API ====================
 
     public void setParentContent(Content content) {
-        // Unregister old mapping when changing or clearing parent content
         if (this.parentContent != null && this.parentContent != content) {
             ClaudeSDKToolWindow.unregisterContentMapping(this.parentContent);
             LOG.debug("[MultiTab] Unregistered old Content -> ClaudeChatWindow mapping");
@@ -289,6 +287,8 @@ public class ClaudeChatWindow {
                         : displayName;
                 LOG.debug("[TabLoading] Auto-initialized original tab name: " + this.originalTabName);
             }
+
+            persistTabSessionState();
         }
     }
 
@@ -323,8 +323,106 @@ public class ClaudeChatWindow {
         return codexSDKBridge;
     }
 
+    /**
+     * Get the project associated with this chat window.
+     *
+     * @return the current project.
+     */
+    public Project getProject() {
+        return this.project;
+    }
+
     public String getSessionId() {
         return sessionId;
+    }
+
+    /**
+     * Returns the provider this tab is currently using ("claude" or "codex").
+     * Used by NodeProcessRegistry to label processes with the user-facing provider
+     * rather than the underlying SDK type (a Claude daemon may still be alive
+     * after the user switched the tab to Codex — the panel reflects the tab's
+     * intent, not the lingering SDK).
+     */
+    public String getCurrentProvider() {
+        HandlerContext ctx = this.handlerContext;
+        return ctx != null ? ctx.getCurrentProvider() : "claude";
+    }
+
+    public ClaudeSession getSession() {
+        return session;
+    }
+
+    public SessionLifecycleManager getSessionLifecycleManager() {
+        return sessionLifecycleManager;
+    }
+
+    public void restorePersistedTabSessionState(TabStateService.TabSessionState savedState) {
+        if (savedState == null || session == null) {
+            return;
+        }
+
+        if (savedState.permissionMode != null && !savedState.permissionMode.trim().isEmpty()) {
+            session.setPermissionMode(savedState.permissionMode);
+        }
+        if (savedState.provider != null && !savedState.provider.trim().isEmpty()) {
+            session.setProvider(savedState.provider);
+        }
+        if (savedState.model != null && !savedState.model.trim().isEmpty()) {
+            session.setModel(savedState.model);
+        }
+        if (savedState.reasoningEffort != null && !savedState.reasoningEffort.trim().isEmpty()) {
+            session.setReasoningEffort(savedState.reasoningEffort);
+        }
+
+        String restoredSessionId = isNonEmpty(savedState.sessionId) ? savedState.sessionId : null;
+        String restoredCwd = isNonEmpty(savedState.cwd) ? savedState.cwd : session.getCwd();
+        session.setSessionInfo(restoredSessionId, restoredCwd);
+        persistTabSessionState();
+
+        LOG.info("[TabRestore] Restored tab session state: provider=" + savedState.provider
+                + ", sessionId=" + savedState.sessionId + ", cwd=" + savedState.cwd + ")");
+    }
+
+    public void restorePersistedTabSessionState(TabStateService.TabSessionState savedState, boolean loadImmediately) {
+        restorePersistedTabSessionState(savedState);
+        if (TabSessionRestorePolicy.shouldLoadImmediately(savedState, loadImmediately)) {
+            loadRestoredHistoryIfNeeded(savedState);
+        }
+    }
+
+    public void loadRestoredHistoryIfNeeded() {
+        if (session == null) {
+            return;
+        }
+
+        TabStateService.TabSessionState currentState = new TabStateService.TabSessionState();
+        currentState.sessionId = session.getSessionId();
+        loadRestoredHistoryIfNeeded(currentState);
+    }
+
+    private void loadRestoredHistoryIfNeeded(TabStateService.TabSessionState savedState) {
+        if (!TabSessionRestorePolicy.shouldLoadHistory(savedState) || session == null) {
+            return;
+        }
+        if (!restoredHistoryLoadStarted.compareAndSet(false, true)) {
+            return;
+        }
+
+        session.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
+            if (!disposed) {
+                callJavaScript("historyLoadComplete");
+            }
+        })).exceptionally(ex -> {
+            LOG.warn("[TabRestore] Failed to load persisted tab history: " + ex.getMessage(), ex);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (!disposed) {
+                    callJavaScript("historyLoadComplete");
+                    callJavaScript("addErrorMessage",
+                            JsUtils.escapeJs("Failed to restore session history: " + ex.getMessage()));
+                }
+            });
+            return null;
+        });
     }
 
     public void addCodeSnippetFromExternal(String selectionInfo) {
@@ -366,7 +464,6 @@ public class ClaudeChatWindow {
             return;
         }
 
-        // Validate function name to prevent JS injection
         if (functionName == null || !SAFE_JS_FUNCTION_NAME.matcher(functionName).matches()) {
             LOG.error("Invalid JavaScript function name rejected: " + functionName);
             return;
@@ -385,7 +482,7 @@ public class ClaudeChatWindow {
                 StringBuilder argsJs = new StringBuilder();
                 if (args != null) {
                     for (int i = 0; i < args.length; i++) {
-                        if (i > 0) argsJs.append(", ");
+                        if (i > 0) { argsJs.append(", "); }
                         String arg = args[i] == null ? "" : args[i];
                         argsJs.append("'").append(arg).append("'");
                     }
@@ -410,7 +507,6 @@ public class ClaudeChatWindow {
     }
 
     void handleJavaScriptMessage(String message) {
-        // Handle console log forwarding (JSON format)
         if (message.startsWith("{\"type\":\"console.")) {
             try {
                 JsonObject json = new Gson().fromJson(message, JsonObject.class);
@@ -419,7 +515,7 @@ public class ClaudeChatWindow {
 
                 StringBuilder logMessage = new StringBuilder("[Webview] ");
                 for (int i = 0; i < args.size(); i++) {
-                    if (i > 0) logMessage.append(" ");
+                    if (i > 0) { logMessage.append(" "); }
                     logMessage.append(args.get(i).toString());
                 }
 
@@ -436,7 +532,6 @@ public class ClaudeChatWindow {
             return;
         }
 
-        // Parse type:content format
         String[] parts = message.split(":", 2);
         if (parts.length < 1) {
             LOG.error("Invalid message format");
@@ -470,26 +565,60 @@ public class ClaudeChatWindow {
                 permissionHandler,
                 () -> slashCommandsFetched,
                 this::onStreamEnded
-        );
+        ) {
+            @Override
+            public void onSessionIdReceived(String newSessionId) {
+                super.onSessionIdReceived(newSessionId);
+                sessionId = newSessionId;
+                persistTabSessionState();
+            }
+        };
         session.setCallback(sessionCallbackAdapter);
+
+        // Wire daemon events directly to frontend (bypasses adapter lifecycle).
+        // Calling through sessionCallbackAdapter would silently drop the event
+        // if setupSessionCallbacks() is invoked again before the title arrives
+        // (adapter.deactivate() → isInactive() → event discarded).
+        // Register only once per ClaudeChatWindow; subsequent setupSessionCallbacks()
+        // calls reuse the existing listener so the bridge keeps a single registration
+        // per window. The listener is removed in dispose().
+        if (this.titleEventListener == null) {
+            this.titleEventListener = (event, data) -> {
+                if ("title_generated".equals(event)) {
+                    String genSessionId = data.has("sessionId") ? data.get("sessionId").getAsString() : null;
+                    String title = data.has("title") ? data.get("title").getAsString() : null;
+                    if (genSessionId != null && title != null) {
+                        ApplicationManager.getApplication().invokeLater(() -> {
+                            if (!disposed) {
+                                callJavaScript("updateSessionTitle",
+                                        JsUtils.escapeJs(genSessionId), JsUtils.escapeJs(title));
+                            }
+                        });
+                    }
+                }
+            };
+            this.claudeSDKBridge.addDaemonEventListener(this.titleEventListener);
+        }
+
+        persistTabSessionState();
     }
 
     private void onStreamEnded() {
         if (session == null) {
             return;
         }
-        // Claude stream_end is emitted at actual streaming completion;
-        // use it as the success sound trigger point.
-        // Only trigger success when the session has no error state,
-        // to avoid conflicting with the error notification from SessionHandler.exceptionally().
         if ("claude".equals(session.getProvider()) && session.getError() == null) {
-            com.github.claudecodegui.notifications.ClaudeNotifier.showSuccess(project, "Task completed");
+            com.github.claudecodegui.notifications.ClaudeNotifier.showSuccess(
+                project,
+                com.github.claudecodegui.notifications.ClaudeNotifier.buildTitleFromSession(session),
+                com.github.claudecodegui.notifications.ClaudeNotifier.buildPreviewFromSession(session, "Task completed"));
         }
     }
 
     private void initializeSessionInfo() {
         String workingDirectory = sessionLifecycleManager.determineWorkingDirectory();
         session.setSessionInfo(null, workingDirectory);
+        persistTabSessionState();
         LOG.info("Initialized with working directory: " + workingDirectory);
     }
 
@@ -513,6 +642,43 @@ public class ClaudeChatWindow {
         }));
     }
 
+    private int getTabIndex() {
+        Content content = this.parentContent;
+        if (content == null) {
+            return -1;
+        }
+        ContentManager contentManager = content.getManager();
+        if (contentManager == null) {
+            return -1;
+        }
+        return contentManager.getIndexOfContent(content);
+    }
+
+    private void persistTabSessionState() {
+        if (project == null || project.isDisposed() || session == null) {
+            return;
+        }
+
+        int tabIndex = getTabIndex();
+        if (tabIndex < 0) {
+            return;
+        }
+
+        TabStateService.TabSessionState snapshot = new TabStateService.TabSessionState();
+        snapshot.provider = session.getProvider();
+        snapshot.sessionId = session.getSessionId();
+        snapshot.cwd = session.getCwd();
+        snapshot.model = session.getModel();
+        snapshot.permissionMode = session.getPermissionMode();
+        snapshot.reasoningEffort = session.getReasoningEffort();
+
+        TabStateService.getInstance(project).saveTabSessionState(tabIndex, snapshot);
+    }
+
+    private boolean isNonEmpty(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
+
     // ==================== Code Snippets ====================
 
     private void addCodeSnippet(String selectionInfo) {
@@ -523,8 +689,9 @@ public class ClaudeChatWindow {
 
     // ==================== Dispose ====================
 
-    public void dispose() {
-        if (disposed) return;
+    public synchronized void dispose() {
+        if (this.disposed) { return; }
+        this.disposed = true;
 
         chatWindowDelegate.dispose();
         editorContextTracker.dispose();
@@ -532,9 +699,16 @@ public class ClaudeChatWindow {
         if (sessionCallbackAdapter != null) {
             sessionCallbackAdapter.dispose();
         }
+        if (titleEventListener != null && claudeSDKBridge != null) {
+            try {
+                claudeSDKBridge.removeDaemonEventListener(titleEventListener);
+            } catch (Exception e) {
+                LOG.warn("Failed to remove daemon event listener: " + e.getMessage());
+            }
+            titleEventListener = null;
+        }
         webviewWatchdog.stop();
 
-        // Unregister permission service dialog showers
         try {
             if (this.sessionId != null && !this.sessionId.isEmpty()) {
                 PermissionService permissionService = PermissionService.getInstance(project, this.sessionId);
@@ -550,7 +724,6 @@ public class ClaudeChatWindow {
 
         LOG.info("Starting window resource cleanup, project: " + project.getName());
 
-        disposed = true;
         handlerContext.setDisposed(true);
 
         if (parentContent != null) {
@@ -561,7 +734,7 @@ public class ClaudeChatWindow {
         ClaudeSDKToolWindow.unregisterWindow(project, this);
 
         try {
-            if (session != null) session.interrupt();
+            if (session != null) { session.interrupt(); }
         } catch (Exception e) {
             LOG.warn("Failed to clean up session: " + e.getMessage());
         }
@@ -599,7 +772,9 @@ public class ClaudeChatWindow {
             LOG.warn("Failed to clean up browser: " + e.getMessage());
         }
 
-        messageDispatcher.clear();
+        if (messageDispatcher != null) {
+            messageDispatcher.clear();
+        }
 
         LOG.info("Window resources fully cleaned up, project: " + project.getName());
     }
@@ -611,117 +786,116 @@ public class ClaudeChatWindow {
             @Override
             public Project getProject() {
                 return project;
-            }                       // Current IDEA project
+            }
 
             @Override
             public ClaudeSDKBridge getClaudeSDKBridge() {
                 return claudeSDKBridge;
-            } // Claude SDK bridge for AI communication
+            }
 
             @Override
             public CodexSDKBridge getCodexSDKBridge() {
                 return codexSDKBridge;
-            }   // Codex SDK bridge for AI communication
+            }
 
             @Override
             public JPanel getMainPanel() {
                 return mainPanel;
-            }                     // Root UI panel for webview embedding
+            }
 
             @Override
             public HtmlLoader getHtmlLoader() {
                 return htmlLoader;
-            }               // HTML resource loader for webview content
+            }
 
             @Override
             public HandlerContext getHandlerContext() {
                 return handlerContext;
-            }    // Shared handler context (JS query, bridges, etc.)
+            }
 
             @Override
             public JBCefBrowser getBrowser() {
                 return browser;
-            }                   // Current JCEF browser instance
+            }
 
             @Override
             public void setBrowser(JBCefBrowser b) {
                 browser = b;
-            }                // Replace browser instance on recreate
+            }
 
             @Override
             public boolean isDisposed() {
                 return disposed;
-            }                       // Check if window has been disposed
+            }
 
             @Override
             public void handleJavaScriptMessage(String msg) {
                 ClaudeChatWindow.this.handleJavaScriptMessage(msg);
-            } // Route JS→Java messages
+            }
 
             @Override
             public WebviewWatchdog getWebviewWatchdog() {
                 return webviewWatchdog;
-            } // Watchdog for webview health monitoring
+            }
 
             @Override
             public void setFrontendReady(boolean ready) {
                 frontendReady = ready;
-            } // Mark frontend load state (reset on reload/recreate)
+            }
         };
     }
 
     private ChatWindowDelegate.DelegateHost createDelegateHost() {
         return new ChatWindowDelegate.DelegateHost() {
-            // --- Read-only accessors ---
             @Override
             public Project getProject() {
                 return project;
-            }                       // Current IDEA project
+            }
 
             @Override
             public ClaudeSDKBridge getClaudeSDKBridge() {
                 return claudeSDKBridge;
-            } // Claude SDK bridge for AI communication
+            }
 
             @Override
             public CodexSDKBridge getCodexSDKBridge() {
                 return codexSDKBridge;
-            }   // Codex SDK bridge for AI communication
+            }
 
             @Override
             public ClaudeSession getSession() {
                 return session;
-            }                  // Active Claude session instance
+            }
 
             @Override
             public CodemossSettingsService getSettingsService() {
                 return settingsService;
-            } // Plugin settings (provider, API key, etc.)
+            }
 
             @Override
             public JPanel getMainPanel() {
                 return mainPanel;
-            }                     // Root UI panel
+            }
 
             @Override
             public JBCefBrowser getBrowser() {
                 return browser;
-            }                   // Current JCEF browser instance
+            }
 
             @Override
             public boolean isDisposed() {
                 return disposed;
-            }                       // Check if window has been disposed
+            }
 
             @Override
             public Content getParentContent() {
                 return parentContent;
-            }            // Tab content this window belongs to
+            }
 
             @Override
             public String getOriginalTabName() {
                 return originalTabName;
-            }         // Original tab name before any rename
+            }
 
             @Override
             public void setOriginalTabName(String name) {
@@ -731,86 +905,87 @@ public class ClaudeChatWindow {
             @Override
             public String getSessionId() {
                 return sessionId;
-            }                     // Unique session identifier
+            }
 
-            // --- Handler context & wiring (initialized during startup) ---
             @Override
             public HandlerContext getHandlerContext() {
                 return handlerContext;
-            }    // Shared handler context (JS query, bridges, etc.)
+            }
 
             @Override
             public void setHandlerContext(HandlerContext ctx) {
                 handlerContext = ctx;
-            }       // Set by initializeHandlers()
+            }
 
             @Override
             public void setMessageDispatcher(MessageDispatcher d) {
                 messageDispatcher = d;
-            } // Set by initializeHandlers()
+            }
 
             @Override
             public void setPermissionHandler(PermissionHandler h) {
                 permissionHandler = h;
-            } // Set by initializeHandlers()
+            }
 
             @Override
             public void setHistoryHandler(HistoryHandler h) {
                 historyHandler = h;
-            }          // Set by initializeHandlers()
+            }
 
-            // --- Session & stream management ---
             @Override
             public SessionLifecycleManager getSessionLifecycleManager() {
                 return sessionLifecycleManager;
-            } // Manages session start/stop lifecycle
+            }
 
             @Override
             public StreamMessageCoalescer getStreamCoalescer() {
                 return streamCoalescer;
-            }                  // Throttles webview stream updates
+            }
 
             @Override
             public WebviewWatchdog getWebviewWatchdog() {
                 return webviewWatchdog;
-            }                          // Watchdog for webview health monitoring
+            }
 
             @Override
             public PermissionHandler getPermissionHandler() {
                 return permissionHandler;
-            }                    // Lazy access — may be null before initializeHandlers()
+            }
 
-            // --- Actions & callbacks ---
             @Override
             public void callJavaScript(String fn, String... args) {
                 ClaudeChatWindow.this.callJavaScript(fn, args);
-            } // Java→JS bridge call
+            }
 
             @Override
             public void interruptDueToPermissionDenial() {
                 ClaudeChatWindow.this.interruptDueToPermissionDenial();
-            }  // Abort session on permission deny
+            }
 
-            // --- Mutable state flags ---
             @Override
             public boolean isFrontendReady() {
                 return frontendReady;
-            }                       // Whether webview has finished loading
+            }
 
             @Override
             public void setFrontendReady(boolean ready) {
                 frontendReady = ready;
-            }           // Updated on load complete / reload
+            }
 
             @Override
             public void setSlashCommandsFetched(boolean fetched) {
                 slashCommandsFetched = fetched;
-            }       // Slash commands loaded from backend
+            }
 
             @Override
             public void setFetchedSlashCommandsCount(int count) {
                 fetchedSlashCommandsCount = count;
-            }     // Number of slash commands fetched
+            }
+
+            @Override
+            public void persistTabSessionState() {
+                ClaudeChatWindow.this.persistTabSessionState();
+            }
         };
     }
 }

@@ -7,6 +7,7 @@ import com.github.claudecodegui.terminal.TerminalMonitorService;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.project.Project;
 
 import java.util.HashMap;
@@ -32,7 +33,7 @@ class RuntimeContextCollector {
     void collectTerminals(List<JsonObject> files, FileHandler.FileListRequest request) {
         ApplicationManager.getApplication().runReadAction(() -> {
             Project project = context.getProject();
-            if (project == null || project.isDisposed()) return;
+            if (project == null || project.isDisposed()) { return; }
 
             try {
                 List<Object> widgets = TerminalMonitorService.getWidgets(project);
@@ -62,6 +63,8 @@ class RuntimeContextCollector {
                         files.add(term);
                     }
                 }
+            } catch (ProcessCanceledException e) {
+                throw e;
             } catch (Throwable t) {
                 LOG.warn("[FileHandler] Failed to collect terminals: " + t.getMessage());
             }
@@ -74,7 +77,7 @@ class RuntimeContextCollector {
     void collectServices(List<JsonObject> files, FileHandler.FileListRequest request) {
         ApplicationManager.getApplication().runReadAction(() -> {
             Project project = context.getProject();
-            if (project == null || project.isDisposed()) return;
+            if (project == null || project.isDisposed()) { return; }
 
             try {
                 List<RunConfigMonitorService.RunConfigInfo> configs = RunConfigMonitorService.getRunConfigurations(project);
@@ -96,6 +99,8 @@ class RuntimeContextCollector {
                         files.add(serviceObj);
                     }
                 }
+            } catch (ProcessCanceledException e) {
+                throw e;
             } catch (Throwable t) {
                 LOG.warn("[FileHandler] Failed to collect services: " + t.getMessage());
             }

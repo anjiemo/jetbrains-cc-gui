@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
@@ -194,9 +195,8 @@ class ClaudeMcpQueryService {
                 return new MarkerResult(null, "", System.currentTimeMillis() - startTime);
             }
 
-            List<String> command = new ArrayList<>();
-            command.add(node);
-            command.add(new File(bridgeDir, CHANNEL_SCRIPT).getAbsolutePath());
+            String scriptPath = new File(bridgeDir, CHANNEL_SCRIPT).getAbsolutePath();
+            List<String> command = NodeDetector.buildNodeScriptCommand(node, scriptPath);
             command.add("claude");
             command.add(commandName);
 
@@ -213,7 +213,7 @@ class ClaudeMcpQueryService {
             ClaudeBridgeUtils.writeStdin(gson.toJson(stdinInput), process, log, logPrefix);
 
             CountDownLatch markerLatch = new CountDownLatch(1);
-            final String[] markerJson = {null};
+            AtomicReference<String> markerJson = new AtomicReference<>(null);
             final StringBuilder output = new StringBuilder();
 
             Thread readerThread = new Thread(() -> {
@@ -223,7 +223,7 @@ class ClaudeMcpQueryService {
                     while ((line = reader.readLine()) != null) {
                         output.append(line).append("\n");
                         if (line.startsWith(markerPrefix)) {
-                            markerJson[0] = line.substring(markerPrefix.length()).trim();
+                            markerJson.set(line.substring(markerPrefix.length()).trim());
                             markerLatch.countDown();
                             break;
                         }
@@ -243,7 +243,7 @@ class ClaudeMcpQueryService {
                 PlatformUtils.terminateProcess(process);
             }
 
-            return new MarkerResult(markerJson[0], output.toString().trim(), elapsed);
+            return new MarkerResult(markerJson.get(), output.toString().trim(), elapsed);
         } catch (Exception e) {
             log.error(logPrefix + " Exception: " + e.getMessage());
             return new MarkerResult(null, "", System.currentTimeMillis() - startTime);

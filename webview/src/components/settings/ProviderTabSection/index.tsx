@@ -8,6 +8,11 @@ import CustomModelDialog from '../CustomModelDialog';
 import { usePluginModels } from '../hooks/usePluginModels';
 import styles from './style.module.less';
 
+const BLOCK_STYLE: React.CSSProperties = { display: 'block' };
+const NONE_STYLE: React.CSSProperties = { display: 'none' };
+const ICON_14_STYLE: React.CSSProperties = { fontSize: 14 };
+const FLEX_1_STYLE: React.CSSProperties = { flex: 1 };
+
 interface ProviderTabSectionProps {
   currentProvider: 'claude' | 'codex' | string;
   // Claude provider props
@@ -24,6 +29,7 @@ interface ProviderTabSectionProps {
   onEditCodexProvider: (provider: CodexProviderConfig) => void;
   onDeleteCodexProvider: (provider: CodexProviderConfig) => void;
   onSwitchCodexProvider: (id: string) => void;
+  onRevokeCodexLocalConfigAuthorization: (fallbackProviderId?: string) => void;
   // Shared
   addToast: (message: string, type: 'info' | 'success' | 'warning' | 'error') => void;
 }
@@ -42,6 +48,7 @@ const ProviderTabSection = ({
   onEditCodexProvider,
   onDeleteCodexProvider,
   onSwitchCodexProvider,
+  onRevokeCodexLocalConfigAuthorization,
   addToast,
 }: ProviderTabSectionProps) => {
   const { t } = useTranslation();
@@ -102,7 +109,7 @@ const ProviderTabSection = ({
       </div>
 
       {/* Use display to preserve component state across tab switches */}
-      <div id="panel-claude-providers" role="tabpanel" style={{ display: activeTab === 'claude' ? 'block' : 'none' }}>
+      <div id="panel-claude-providers" role="tabpanel" style={activeTab === 'claude' ? BLOCK_STYLE : NONE_STYLE}>
         <div
           className={styles.pluginModelsRow}
           onClick={() => openModelDialog('claude')}
@@ -110,14 +117,14 @@ const ProviderTabSection = ({
           tabIndex={0}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openModelDialog('claude'); }}
         >
-          <span className="codicon codicon-symbol-misc" style={{ fontSize: 14 }} />
+          <span className="codicon codicon-symbol-misc" style={ICON_14_STYLE} />
           <span className={styles.pluginModelsLabel}>
             {t('settings.pluginModels.title')}
           </span>
           {claudeModels.models.length > 0 && (
             <span className={styles.pluginModelsBadge}>{claudeModels.models.length}</span>
           )}
-          <span style={{ flex: 1 }} />
+          <span style={FLEX_1_STYLE} />
           <button
             className={styles.pluginModelsManageBtn}
             onClick={(e) => { e.stopPropagation(); openModelDialog('claude'); }}
@@ -137,7 +144,7 @@ const ProviderTabSection = ({
         />
       </div>
 
-      <div id="panel-codex-providers" role="tabpanel" style={{ display: activeTab === 'codex' ? 'block' : 'none' }}>
+      <div id="panel-codex-providers" role="tabpanel" style={activeTab === 'codex' ? BLOCK_STYLE : NONE_STYLE}>
         <div
           className={styles.pluginModelsRow}
           onClick={() => openModelDialog('codex')}
@@ -145,14 +152,14 @@ const ProviderTabSection = ({
           tabIndex={0}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openModelDialog('codex'); }}
         >
-          <span className="codicon codicon-symbol-misc" style={{ fontSize: 14 }} />
+          <span className="codicon codicon-symbol-misc" style={ICON_14_STYLE} />
           <span className={styles.pluginModelsLabel}>
             {t('settings.pluginModels.title')}
           </span>
           {codexModels.models.length > 0 && (
             <span className={styles.pluginModelsBadge}>{codexModels.models.length}</span>
           )}
-          <span style={{ flex: 1 }} />
+          <span style={FLEX_1_STYLE} />
           <button
             className={styles.pluginModelsManageBtn}
             onClick={(e) => { e.stopPropagation(); openModelDialog('codex'); }}
@@ -167,6 +174,7 @@ const ProviderTabSection = ({
           onEditCodexProvider={onEditCodexProvider}
           onDeleteCodexProvider={onDeleteCodexProvider}
           onSwitchCodexProvider={onSwitchCodexProvider}
+          onRevokeCodexLocalConfigAuthorization={onRevokeCodexLocalConfigAuthorization}
           showHeader={false}
         />
       </div>

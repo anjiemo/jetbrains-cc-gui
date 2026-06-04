@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { memo, useState, useEffect, useRef, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react';
 import type { TFunction } from 'i18next';
 import type { ClaudeMessage, ClaudeContentBlock, ToolResultBlock } from '../types';
 import { getMessageKey } from '../utils/messageUtils';
@@ -6,9 +6,45 @@ import { MessageItem } from './MessageItem';
 import WaitingIndicator from './WaitingIndicator';
 import { ContextMenu } from './ContextMenu';
 import { useContextMenu, copySelection } from '../hooks/useContextMenu.js';
+import type { MessageListRevealHandle } from './ConversationSearch/types';
 
 /** Always render at least this many recent messages. Earlier messages are collapsed. */
 const VISIBLE_MESSAGE_WINDOW = 15;
+/** Number of additional earlier messages to reveal per "show earlier" click. */
+const REVEAL_PAGE_SIZE = 30;
+
+function extractToolResultPreview(result: ToolResultBlock | null | undefined): string {
+  if (!result) return 'pending';
+
+  let text = '';
+  if (typeof result.content === 'string') {
+    text = result.content;
+  } else if (Array.isArray(result.content)) {
+    text = result.content
+      .map((item) => (item && typeof item.text === 'string' ? item.text : ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  const preview = text.length > 200 ? text.slice(0, 200) : text;
+  return `${result.is_error === true ? 'error' : 'ok'}:${text.length}:${preview}`;
+}
+
+function getMessageToolResultSignature(
+  message: ClaudeMessage,
+  messageIndex: number,
+  getContentBlocks: (message: ClaudeMessage) => ClaudeContentBlock[],
+  findToolResult: (toolId: string | undefined, messageIndex: number) => ToolResultBlock | null | undefined,
+): string {
+  const toolUses = getContentBlocks(message).filter(
+    (block): block is Extract<ClaudeContentBlock, { type: 'tool_use' }> => block.type === 'tool_use',
+  );
+  if (toolUses.length === 0) return '';
+
+  return toolUses
+    .map((block) => `${block.id ?? 'unknown'}:${extractToolResultPreview(findToolResult(block.id, messageIndex))}`)
+    .join('|');
+}
 
 interface MessageListProps {
   messages: ClaudeMessage[];
@@ -26,9 +62,12 @@ interface MessageListProps {
   /** Notify parent when the number of collapsed (hidden) messages changes. */
   onCollapsedCountChange?: (count: number) => void;
   onNavigateToProviderSettings?: () => void;
+  onNavigateToDependencySettings?: () => void;
+  /** Current active provider id; forwarded to MessageItem for streaming-connect label. */
+  currentProvider?: string;
 }
 
-export const MessageList = memo(function MessageList({
+export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListProps>(function MessageList({
   messages,
   streamingActive,
   isThinking,
@@ -43,8 +82,13 @@ export const MessageList = memo(function MessageList({
   onMessageNodeRef,
   onCollapsedCountChange,
   onNavigateToProviderSettings,
-}: MessageListProps) {
-  const [showAll, setShowAll] = useState(false);
+  onNavigateToDependencySettings,
+  currentProvider,
+}, ref) {
+  // Number of earlier messages revealed beyond VISIBLE_MESSAGE_WINDOW. Grows in
+  // page-size chunks as the user clicks "show earlier", avoiding a single huge
+  // mount when sessions exceed hundreds of messages.
+  const [revealedCount, setRevealedCount] = useState(0);
 
   // Context menu for message list (copy only, when text selected)
   const ctxMenu = useContextMenu();
@@ -55,18 +99,39 @@ export const MessageList = memo(function MessageList({
     }
   }, [ctxMenu.open]);
 
-  // Reset showAll when a new session starts (first message ID changes)
+  // Reset revealed count when a new session starts (first message ID changes)
   const firstMsgIdRef = useRef(messages[0]?.id);
   useEffect(() => {
     const currentFirstId = messages[0]?.id;
     if (currentFirstId !== firstMsgIdRef.current) {
-      setShowAll(false);
+      setRevealedCount(0);
     }
     firstMsgIdRef.current = currentFirstId;
   }, [messages]);
 
-  const shouldCollapse = !showAll && messages.length > VISIBLE_MESSAGE_WINDOW;
-  const collapsedCount = shouldCollapse ? messages.length - VISIBLE_MESSAGE_WINDOW : 0;
+  const totalEarlierMessages = Math.max(0, messages.length - VISIBLE_MESSAGE_WINDOW);
+  const effectiveRevealed = Math.min(revealedCount, totalEarlierMessages);
+  const shouldCollapse = effectiveRevealed < totalEarlierMessages;
+  const collapsedCount = totalEarlierMessages - effectiveRevealed;
+  const nextChunkSize = Math.min(REVEAL_PAGE_SIZE, collapsedCount);
+
+  const handleRevealMore = useCallback(() => {
+    setRevealedCount((prev) => prev + REVEAL_PAGE_SIZE);
+  }, []);
+
+  // Imperative API so the in-page search can expand everything before scanning.
+  // Returns the number of messages that were just revealed (0 when nothing
+  // was collapsed). This lets the search panel surface "Expanded N earlier
+  // messages" exactly once per panel-open, per the agreed design.
+  useImperativeHandle(ref, (): MessageListRevealHandle => ({
+    revealAll: () => {
+      if (totalEarlierMessages === 0) return 0;
+      const previouslyHidden = collapsedCount;
+      if (previouslyHidden === 0) return 0;
+      setRevealedCount(totalEarlierMessages);
+      return previouslyHidden;
+    },
+  }), [totalEarlierMessages, collapsedCount]);
 
   // Notify parent of collapsed count changes (for anchor rail sync)
   useEffect(() => {
@@ -92,15 +157,17 @@ export const MessageList = memo(function MessageList({
       {shouldCollapse && (
         <div
           className="collapsed-messages-indicator"
-          onClick={() => setShowAll(true)}
+          onClick={handleRevealMore}
         >
-          {t('chat.showEarlierMessages', { count: collapsedCount })}
+          {t('chat.showEarlierMessages', { count: nextChunkSize })}
+          {collapsedCount > nextChunkSize ? ` (${collapsedCount})` : ''}
         </div>
       )}
 
       {visibleMessages.map((message, visibleIndex) => {
         const messageIndex = shouldCollapse ? visibleIndex + collapsedCount : visibleIndex;
         const messageKey = getMessageKey(message, messageIndex);
+        const toolResultSignature = getMessageToolResultSignature(message, messageIndex, getContentBlocks, findToolResult);
 
         return (
           <MessageItem
@@ -118,6 +185,9 @@ export const MessageList = memo(function MessageList({
             extractMarkdownContent={extractMarkdownContent}
             onNodeRef={onMessageNodeRef}
             onNavigateToProviderSettings={onNavigateToProviderSettings}
+            onNavigateToDependencySettings={onNavigateToDependencySettings}
+            toolResultSignature={toolResultSignature}
+            currentProvider={currentProvider}
           />
         );
       })}
@@ -127,4 +197,4 @@ export const MessageList = memo(function MessageList({
       <div ref={messagesEndRef} />
     </div>
   );
-});
+}));

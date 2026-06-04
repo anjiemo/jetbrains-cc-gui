@@ -4,6 +4,7 @@ import com.github.claudecodegui.handler.core.BaseMessageHandler;
 import com.github.claudecodegui.handler.core.HandlerContext;
 
 import com.github.claudecodegui.bridge.EnvironmentConfigurator;
+import com.github.claudecodegui.bridge.ProcessManager;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
@@ -17,14 +18,11 @@ import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.fileEditor.TextEditor;
 import com.intellij.openapi.vfs.VirtualFile;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -41,6 +39,12 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
     private static final Logger LOG = Logger.getInstance(PromptEnhancerHandler.class);
     private final Gson gson = new Gson();
     private final EnvironmentConfigurator envConfigurator = new EnvironmentConfigurator();
+
+    // Hard timeout for the enhancement Node.js process. Without this, a network-stalled
+    // SDK call would block the calling thread forever and leak the child process.
+    private static final long ENHANCE_TIMEOUT_SECONDS = 60;
+    // Grace window after the process exits, for the async reader thread to drain stdout.
+    private static final long READER_DRAIN_SECONDS = 5;
 
     // Number of context lines to capture before and after the cursor
     private static final int CURSOR_CONTEXT_LINES = 10;
@@ -71,7 +75,9 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
         "- Do NOT use Markdown headings or formatting\n" +
         "- Do NOT ask the user any questions\n" +
         "- Output the prompt text directly, ready to be copied and used\n" +
-        "- [KEY] The optimized prompt MUST be in the same language as the user's original prompt. If the original is in English, output in English; if in Chinese, output in Chinese; if in Japanese, output in Japanese. Always match the language of the original prompt.\n\n" +
+        "- [KEY] The optimized prompt MUST be in the same language as the user's original prompt. "
+        + "If the original is in English, output in English; if in Chinese, output in Chinese; "
+        + "if in Japanese, output in Japanese. Always match the language of the original prompt.\n\n" +
         "[How to Utilize Context Information]:\n" +
         "1. If the user's prompt contains vague references (e.g., \"this code\", \"this file\", \"here\"), replace them with specific descriptions based on the context\n" +
         "2. Add relevant professional terminology and best practices based on the code language type\n" +
@@ -89,8 +95,14 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
         "User input: Please optimize the following prompt:\\n\\nAnalyze the logic\n" +
         "Your output: Please analyze the business logic of the current code file, including the main functionality, data flow, and key processing steps.\n\n" +
         "Example 2 (with context):\n" +
-        "User input: Please optimize the following prompt:\\n\\nWhat's wrong with this code\\n\\n---\\nBelow is the relevant context information:\\n\\n[User's Selected Code]\\n```java\\npublic void process() { ... }\\n```\\n\\n[Current File] UserService.java\\n[Language Type] java\n" +
-        "Your output: Please analyze the process() method in UserService.java, checking for potential issues including but not limited to: null pointer exception risks, resource leaks, thread safety concerns, performance bottlenecks, and provide improvement suggestions.";
+        "User input: Please optimize the following prompt:\\n\\nWhat's wrong with this code\\n\\n---\\n"
+        + "Below is the relevant context information:\\n\\n[User's Selected Code]\\n"
+        + "```java\\npublic void process() { ... }\\n```\\n\\n[Current File] UserService.java\\n"
+        + "[Language Type] java\n" +
+        "Your output: Please analyze the process() method in UserService.java, "
+        + "checking for potential issues including but not limited to: null pointer exception risks, "
+        + "resource leaks, thread safety concerns, performance bottlenecks, "
+        + "and provide improvement suggestions.";
 
     public PromptEnhancerHandler(HandlerContext context) {
         super(context);
@@ -119,7 +131,7 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
             try {
                 JsonObject payload = gson.fromJson(content, JsonObject.class);
                 String originalPrompt = payload.has("prompt") ? payload.get("prompt").getAsString() : "";
-                String model = payload.has("model") ? payload.get("model").getAsString() : null;
+                String legacyModel = payload.has("model") ? payload.get("model").getAsString() : null;
 
                 if (originalPrompt.isEmpty()) {
                     sendEnhanceResult(false, "", "Prompt is empty");
@@ -127,8 +139,8 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
                 }
 
                 LOG.info("[PromptEnhancer] Starting prompt enhancement: " + originalPrompt.substring(0, Math.min(50, originalPrompt.length())) + "...");
-                if (model != null) {
-                    LOG.info("[PromptEnhancer] Using model: " + model);
+                if (legacyModel != null) {
+                    LOG.info("[PromptEnhancer] Received legacy model from frontend: " + legacyModel);
                 }
 
                 // Automatically collect context information from the editor
@@ -165,7 +177,8 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
                 }
 
                 // Call AI service for enhancement (passing context information)
-                String enhancedPrompt = callAIForEnhancement(originalPrompt, model, contextObj);
+                JsonObject promptEnhancerConfig = context.getSettingsService().getPromptEnhancerConfig();
+                String enhancedPrompt = callAIForEnhancement(originalPrompt, legacyModel, contextObj, promptEnhancerConfig);
 
                 if (enhancedPrompt != null && !enhancedPrompt.isEmpty()) {
                     LOG.info("[PromptEnhancer] Enhancement successful");
@@ -298,7 +311,7 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
      * @return language type name
      */
     private String getLanguageFromExtension(String extension) {
-        if (extension == null) return "text";
+        if (extension == null) { return "text"; }
 
         switch (extension.toLowerCase()) {
             case "java": return "java";
@@ -331,15 +344,48 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
     }
 
     /**
+     * Build a compact, redaction-safe description of the prompt enhancer config
+     * for logging. Avoids dumping the entire JSON (which may include unrelated
+     * availability/resolution metadata).
+     */
+    private static String describePromptEnhancerConfig(JsonObject promptEnhancerConfig) {
+        if (promptEnhancerConfig == null) {
+            return "none";
+        }
+        String provider = null;
+        if (promptEnhancerConfig.has("effectiveProvider")
+                && !promptEnhancerConfig.get("effectiveProvider").isJsonNull()) {
+            provider = promptEnhancerConfig.get("effectiveProvider").getAsString();
+        }
+        String model = null;
+        if (provider != null
+                && promptEnhancerConfig.has("models")
+                && promptEnhancerConfig.get("models").isJsonObject()) {
+            JsonObject models = promptEnhancerConfig.getAsJsonObject("models");
+            if (models.has(provider) && !models.get(provider).isJsonNull()) {
+                model = models.get(provider).getAsString();
+            }
+        }
+        return (provider != null ? provider : "unresolved")
+                + ", model: " + (model != null ? model : "default");
+    }
+
+    /**
      * Call the AI service for prompt enhancement.
      * @param originalPrompt the original prompt
-     * @param model the model to use (optional)
+     * @param legacyModel the legacy model to use as a fallback (optional)
      * @param contextObj context information (optional)
+     * @param promptEnhancerConfig resolved prompt enhancer configuration
      */
-    private String callAIForEnhancement(String originalPrompt, String model, JsonObject contextObj) {
+    private String callAIForEnhancement(
+            String originalPrompt,
+            String legacyModel,
+            JsonObject contextObj,
+            JsonObject promptEnhancerConfig
+    ) {
         LOG.info("[PromptEnhancer] Starting AI service call for prompt enhancement");
         LOG.info("[PromptEnhancer] Original prompt: " + originalPrompt);
-        LOG.info("[PromptEnhancer] Using model: " + (model != null ? model : "default"));
+        LOG.info("[PromptEnhancer] Using provider: " + describePromptEnhancerConfig(promptEnhancerConfig));
 
         try {
             // Call AI service using a Node.js script
@@ -370,46 +416,51 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
             // Set environment variables
             envConfigurator.updateProcessEnvironment(pb, nodeExecutable);
 
-            Process process = pb.start();
-            LOG.info("[PromptEnhancer] Node.js process started");
-
-            // Send request data to stdin (including context information)
+            // Build stdin payload
             JsonObject stdinInput = new JsonObject();
             stdinInput.addProperty("prompt", originalPrompt);
             stdinInput.addProperty("systemPrompt", ENHANCE_SYSTEM_PROMPT);
-            if (model != null && !model.isEmpty()) {
-                stdinInput.addProperty("model", model);
+            if (legacyModel != null && !legacyModel.isEmpty()) {
+                stdinInput.addProperty("legacyModel", legacyModel);
             }
-            // Add context information
             if (contextObj != null) {
                 stdinInput.add("context", contextObj);
             }
-
-            try (OutputStreamWriter writer = new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8)) {
-                writer.write(gson.toJson(stdinInput));
-                writer.flush();
+            if (promptEnhancerConfig != null) {
+                stdinInput.add("promptEnhancerConfig", promptEnhancerConfig);
             }
 
-            // Read the response
+            // Delegate to the runner so that:
+            //  1. The process is registered with ProcessManager (cleanup on shutdown).
+            //  2. A hard 60s timeout actually kills hung Node processes.
+            //  3. The process is unregistered + force-killed in finally on every exit path.
+            // The original code lacked all three, leaking child processes forever when
+            // the SDK call hung on a stalled network connection.
+            ProcessManager processManager = context.getClaudeSDKBridge().getProcessManager();
             StringBuilder response = new StringBuilder();
             StringBuilder allOutput = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    allOutput.append(line).append("\n");
-                    // Print all output for debugging
-                    LOG.info("[PromptEnhancer] Node.js: " + line);
-                    if (line.startsWith("[ENHANCED]")) {
-                        // Decode the special marker, restore newlines
-                        String enhancedText = line.substring("[ENHANCED]".length()).trim();
-                        enhancedText = enhancedText.replace("{{NEWLINE}}", "\n");
-                        response.append(enhancedText);
-                    }
-                }
+            try {
+                int exitCode = PromptEnhancerProcessRunner.runWithProcessManager(
+                        pb,
+                        processManager,
+                        gson.toJson(stdinInput),
+                        ENHANCE_TIMEOUT_SECONDS,
+                        READER_DRAIN_SECONDS,
+                        line -> {
+                            allOutput.append(line).append("\n");
+                            LOG.info("[PromptEnhancer] Node.js: " + line);
+                            if (line.startsWith("[ENHANCED]")) {
+                                String enhancedText = line.substring("[ENHANCED]".length()).trim();
+                                enhancedText = enhancedText.replace("{{NEWLINE}}", "\n");
+                                response.append(enhancedText);
+                            }
+                        }
+                );
+                LOG.info("[PromptEnhancer] Node.js process exit code: " + exitCode);
+            } catch (TimeoutException te) {
+                LOG.warn("[PromptEnhancer] " + te.getMessage());
+                return null;
             }
-
-            int exitCode = process.waitFor();
-            LOG.info("[PromptEnhancer] Node.js process exit code: " + exitCode);
 
             if (response.length() == 0 && allOutput.length() > 0) {
                 LOG.warn("[PromptEnhancer] [ENHANCED] marker not found, full output:\n" + allOutput);
@@ -441,4 +492,3 @@ public class PromptEnhancerHandler extends BaseMessageHandler {
         });
     }
 }
-

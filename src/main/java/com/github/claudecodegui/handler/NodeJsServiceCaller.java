@@ -1,6 +1,9 @@
 package com.github.claudecodegui.handler;
 
+import com.github.claudecodegui.bridge.NodeDetector;
+import com.github.claudecodegui.bridge.ProcessManager;
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.util.PlatformUtils;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -40,17 +43,20 @@ public class NodeJsServiceCaller {
 
         String bridgePath = context.getClaudeSDKBridge().getSdkTestDir().getAbsolutePath();
         String nodePath = context.getClaudeSDKBridge().getNodeExecutable();
+        String scriptBridgePath = NodeDetector.isWslPath(nodePath)
+                ? NodeDetector.convertToWslPath(bridgePath)
+                : bridgePath.replace("\\", "\\\\");
 
         String nodeScript = String.format(
             "const { %s } = require('%s/services/favorites-service.cjs'); " +
             "const result = %s(process.env.SESSION_ID); " +
             "console.log(JSON.stringify(result));",
             functionName,
-            bridgePath.replace("\\", "\\\\"),
+            scriptBridgePath,
             functionName
         );
 
-        ProcessBuilder pb = new ProcessBuilder(nodePath, "-e", nodeScript);
+        ProcessBuilder pb = buildNodeProcessBuilder(nodePath, nodeScript);
         pb.redirectErrorStream(true);
         pb.environment().put("SESSION_ID", sessionId);
 
@@ -65,17 +71,20 @@ public class NodeJsServiceCaller {
 
         String bridgePath = context.getClaudeSDKBridge().getSdkTestDir().getAbsolutePath();
         String nodePath = context.getClaudeSDKBridge().getNodeExecutable();
+        String scriptBridgePath = NodeDetector.isWslPath(nodePath)
+                ? NodeDetector.convertToWslPath(bridgePath)
+                : bridgePath.replace("\\", "\\\\");
 
         String nodeScript = String.format(
             "const { %s } = require('%s/services/session-titles-service.cjs'); " +
             "const result = %s(); " +
             "console.log(JSON.stringify(result));",
             functionName,
-            bridgePath.replace("\\", "\\\\"),
+            scriptBridgePath,
             functionName
         );
 
-        ProcessBuilder pb = new ProcessBuilder(nodePath, "-e", nodeScript);
+        ProcessBuilder pb = buildNodeProcessBuilder(nodePath, nodeScript);
         pb.redirectErrorStream(true);
 
         return executeNodeScript(pb);
@@ -89,17 +98,20 @@ public class NodeJsServiceCaller {
 
         String bridgePath = context.getClaudeSDKBridge().getSdkTestDir().getAbsolutePath();
         String nodePath = context.getClaudeSDKBridge().getNodeExecutable();
+        String scriptBridgePath = NodeDetector.isWslPath(nodePath)
+                ? NodeDetector.convertToWslPath(bridgePath)
+                : bridgePath.replace("\\", "\\\\");
 
         String nodeScript = String.format(
             "const { %s } = require('%s/services/session-titles-service.cjs'); " +
             "const result = %s(process.env.SESSION_ID, process.env.CUSTOM_TITLE); " +
             "console.log(JSON.stringify(result));",
             functionName,
-            bridgePath.replace("\\", "\\\\"),
+            scriptBridgePath,
             functionName
         );
 
-        ProcessBuilder pb = new ProcessBuilder(nodePath, "-e", nodeScript);
+        ProcessBuilder pb = buildNodeProcessBuilder(nodePath, nodeScript);
         pb.redirectErrorStream(true);
         pb.environment().put("SESSION_ID", sessionId);
         pb.environment().put("CUSTOM_TITLE", customTitle);
@@ -113,19 +125,30 @@ public class NodeJsServiceCaller {
     public String callNodeJsDeleteTitle(String sessionId) throws Exception {
         String bridgePath = context.getClaudeSDKBridge().getSdkTestDir().getAbsolutePath();
         String nodePath = context.getClaudeSDKBridge().getNodeExecutable();
+        String scriptBridgePath = NodeDetector.isWslPath(nodePath)
+                ? NodeDetector.convertToWslPath(bridgePath)
+                : bridgePath.replace("\\", "\\\\");
 
         String nodeScript = String.format(
             "const { deleteTitle } = require('%s/services/session-titles-service.cjs'); " +
             "const result = deleteTitle(process.env.SESSION_ID); " +
             "console.log(JSON.stringify({ success: result }));",
-            bridgePath.replace("\\", "\\\\")
+            scriptBridgePath
         );
 
-        ProcessBuilder pb = new ProcessBuilder(nodePath, "-e", nodeScript);
+        ProcessBuilder pb = buildNodeProcessBuilder(nodePath, nodeScript);
         pb.redirectErrorStream(true);
         pb.environment().put("SESSION_ID", sessionId);
 
         return executeNodeScript(pb);
+    }
+
+    /**
+     * Build a ProcessBuilder for running a Node.js inline script.
+     * Delegates to {@link NodeDetector#buildNodeInlineCommand} so WSL prefixing is centralised.
+     */
+    private ProcessBuilder buildNodeProcessBuilder(String nodePath, String nodeScript) {
+        return new ProcessBuilder(NodeDetector.buildNodeInlineCommand(nodePath, nodeScript));
     }
 
     /**
@@ -144,29 +167,43 @@ public class NodeJsServiceCaller {
      * and return the last line of stdout (expected to be JSON).
      */
     private String executeNodeScript(ProcessBuilder pb) throws Exception {
-        Process process = pb.start();
+        // L8 fix: register with ProcessManager so cleanupAllProcesses sees this child.
+        ProcessManager processManager = context.getClaudeSDKBridge().getProcessManager();
+        String channelId = ProcessManager.newChannelId("node-service");
+        Process process = null;
+        try {
+            process = pb.start();
+            processManager.registerProcess(channelId, process);
 
-        StringBuilder output = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line).append("\n");
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+
+            boolean finished = process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (!finished) {
+                PlatformUtils.terminateProcess(process);
+                throw new Exception("Node.js process timed out after " + PROCESS_TIMEOUT_SECONDS + " seconds");
+            }
+
+            int exitCode = process.exitValue();
+            if (exitCode != 0) {
+                throw new Exception("Node.js process exited with code " + exitCode + ": " + output);
+            }
+
+            String[] lines = output.toString().split("\n");
+            return lines.length > 0 ? lines[lines.length - 1] : "{}";
+        } finally {
+            if (process != null) {
+                if (process.isAlive()) {
+                    PlatformUtils.terminateProcess(process);
+                }
+                processManager.unregisterProcess(channelId, process);
             }
         }
-
-        boolean finished = process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        if (!finished) {
-            process.destroyForcibly();
-            throw new Exception("Node.js process timed out after " + PROCESS_TIMEOUT_SECONDS + " seconds");
-        }
-
-        int exitCode = process.exitValue();
-        if (exitCode != 0) {
-            throw new Exception("Node.js process exited with code " + exitCode + ": " + output);
-        }
-
-        String[] lines = output.toString().split("\n");
-        return lines.length > 0 ? lines[lines.length - 1] : "{}";
     }
 }

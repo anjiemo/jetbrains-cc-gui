@@ -33,4 +33,14 @@ public class SessionSendServiceTest {
                 SessionSendService.resolveEffectivePermissionMode("claude", null, null)
         );
     }
+
+    @Test
+    public void getCodexRuntimeAccessErrorRequiresAuthorizationOrManagedProvider() {
+        assertEquals(
+                "Codex local configuration access is not authorized. Please authorize local ~/.codex access or enable a managed Codex provider first.",
+                SessionSendService.getCodexRuntimeAccessError("inactive")
+        );
+        assertNull(SessionSendService.getCodexRuntimeAccessError("managed"));
+        assertNull(SessionSendService.getCodexRuntimeAccessError("cli_login"));
+    }
 }

@@ -1,10 +1,7 @@
 package com.github.claudecodegui.util;
 
-import com.intellij.ide.plugins.IdeaPluginDescriptor;
-import com.intellij.ide.plugins.PluginManagerCore;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
-import com.intellij.openapi.extensions.PluginId;
 
 import java.io.File;
 import java.lang.management.ManagementFactory;
@@ -105,24 +102,11 @@ public class PlatformUtils {
             synchronized (PlatformUtils.class) {
                 if (cachedPluginId == null) {
                     try {
-                        // Get the classloader for the current class
-                        ClassLoader classLoader = PlatformUtils.class.getClassLoader();
-
-                        // Iterate over all plugins to find the one containing the current class
-                        for (IdeaPluginDescriptor plugin : PluginManagerCore.getPlugins()) {
-                            if (plugin.getPluginClassLoader() == classLoader) {
-                                cachedPluginId = plugin.getPluginId().getIdString();
-                                LOG.info("Plugin ID detected: " + cachedPluginId);
-                                return cachedPluginId;
-                            }
-                        }
-
-                        // If no matching plugin found, use fallback value
-                        LOG.warn("Failed to detect plugin ID: no matching plugin found");
-                        cachedPluginId = "com.github.idea-claude-code-gui"; // fallback value
+                        cachedPluginId = PluginMetadata.getPluginId();
+                        LOG.info("Plugin ID detected: " + cachedPluginId);
                     } catch (Exception e) {
                         LOG.warn("Failed to detect plugin ID: " + e.getMessage());
-                        cachedPluginId = "com.github.idea-claude-code-gui"; // fallback value
+                        cachedPluginId = PluginMetadata.getPluginId();
                     }
                 }
             }
@@ -190,12 +174,10 @@ public class PlatformUtils {
                 return true;
             }
 
-            // Check plugin actual path
-            IdeaPluginDescriptor plugin = PluginManagerCore.getPlugin(
-                    PluginId.getId(getPluginId())
-            );
-            if (plugin != null) {
-                String pluginPath = plugin.getPluginPath().toString();
+            // Check plugin actual path using the current classpath location.
+            File pluginDir = PluginMetadata.getPluginDirectory(PlatformUtils.class);
+            if (pluginDir != null) {
+                String pluginPath = pluginDir.getAbsolutePath();
                 if (pluginPath.contains("build")) {
                     LOG.info("Dev mode detected: plugin path contains build");
                     return true;
@@ -359,7 +341,8 @@ public class PlatformUtils {
                 ProcessBuilder pb = new ProcessBuilder(
                         "taskkill", "/F", "/T", "/PID", String.valueOf(pid)
                 );
-                pb.redirectErrorStream(true);
+                pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+                pb.redirectError(ProcessBuilder.Redirect.DISCARD);
                 Process killer = pb.start();
                 boolean finished = killer.waitFor(5, TimeUnit.SECONDS);
                 if (!finished) {
@@ -428,7 +411,8 @@ public class PlatformUtils {
                 ProcessBuilder pb = new ProcessBuilder(
                         "taskkill", "/F", "/T", "/PID", String.valueOf(pid)
                 );
-                pb.redirectErrorStream(true);
+                pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+                pb.redirectError(ProcessBuilder.Redirect.DISCARD);
                 Process killer = pb.start();
                 return killer.waitFor(5, TimeUnit.SECONDS);
             } else {

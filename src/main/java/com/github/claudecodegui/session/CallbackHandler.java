@@ -1,6 +1,5 @@
 package com.github.claudecodegui.session;
 
-import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.permission.PermissionRequest;
 
 import java.util.List;
@@ -132,11 +131,30 @@ public class CallbackHandler {
     }
 
     /**
+     * Notify that a block reset signal was received.
+     * Frontend should clear streaming content refs to prevent cross-turn merging.
+     */
+    public void notifyBlockReset() {
+        if (callback != null) {
+            callback.onBlockReset();
+        }
+    }
+
+    /**
      * Notify of a usage update.
      */
     public void notifyUsageUpdate(int usedTokens, int maxTokens) {
         if (callback != null) {
             callback.onUsageUpdate(usedTokens, maxTokens);
+        }
+    }
+
+    /**
+     * Notify that a specific message received its provider UUID.
+     */
+    public void notifyUserMessageUuidPatched(String content, String uuid) {
+        if (callback != null) {
+            callback.onUserMessageUuidPatched(content, uuid);
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.github.claudecodegui.handler.provider;
 
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.settings.ProviderManager;
 
 import com.github.claudecodegui.model.DeleteResult;
 import com.github.claudecodegui.util.PlatformUtils;
@@ -18,8 +19,6 @@ import java.nio.file.Paths;
  * Handles Claude provider CRUD operations and switching.
  */
 public class ClaudeProviderOperations {
-    private static final String DISABLED_PROVIDER_ID = "__disabled__";
-
     private static final Logger LOG = Logger.getInstance(ClaudeProviderOperations.class);
     private static final Gson GSON = new Gson();
 
@@ -146,6 +145,10 @@ public class ClaudeProviderOperations {
             String id = data.get("id").getAsString();
             JsonObject updates = data.getAsJsonObject("updates");
 
+            if (ProviderManager.LOCAL_SETTINGS_PROVIDER_ID.equals(id) || ProviderManager.CLI_LOGIN_PROVIDER_ID.equals(id)) {
+                throw new IllegalArgumentException("Special provider '" + id + "' cannot be updated via update_provider");
+            }
+
             context.getSettingsService().updateClaudeProvider(id, updates);
 
             boolean syncedActiveProvider = false;
@@ -230,7 +233,25 @@ public class ClaudeProviderOperations {
             JsonObject data = GSON.fromJson(content, JsonObject.class);
             String id = data.get("id").getAsString();
 
-            if (DISABLED_PROVIDER_ID.equals(id)) {
+            // Shut down the Claude daemon before applying any provider switch.
+            //
+            // The daemon caches process.env (set once at boot by setupApiKey() reading
+            // ~/.codemoss/config.json) and the Agent SDK spawns its CLI subprocess at
+            // runtime-creation time, freezing whatever ANTHROPIC_API_KEY / OAuth state
+            // was active then. Live runtimes are reused across turns by signature, and
+            // that signature does NOT include auth state — so without a restart, the
+            // next message after a provider switch would silently keep using the old
+            // credential until the daemon idle-timed out (10 min – 6 hr).
+            //
+            // Killing the daemon here forces a fresh spawn on the next request, where
+            // setupApiKey() re-reads config.json and applies the new auth mode.
+            try {
+                context.getClaudeSDKBridge().shutdownDaemon();
+            } catch (Exception e) {
+                LOG.warn("[ProviderHandler] Failed to shut down Claude daemon during switch", e);
+            }
+
+            if (ProviderManager.DISABLED_PROVIDER_ID.equals(id)) {
                 context.getSettingsService().deactivateClaudeProvider();
 
                 ApplicationManager.getApplication().invokeLater(() -> {
@@ -243,7 +264,7 @@ public class ClaudeProviderOperations {
             }
 
             // Clean up CLI login flag when switching to any non-CLI-login provider
-            if (!"__cli_login__".equals(id)) {
+            if (!ProviderManager.CLI_LOGIN_PROVIDER_ID.equals(id)) {
                 try {
                     context.getSettingsService().removeCliLoginFromClaudeSettings();
                 } catch (Exception e) {
@@ -251,7 +272,7 @@ public class ClaudeProviderOperations {
                 }
             }
 
-            if ("__local_settings_json__".equals(id)) {
+            if (ProviderManager.LOCAL_SETTINGS_PROVIDER_ID.equals(id)) {
                 // Validate settings.json exists
                 Path settingsPath = Paths.get(PlatformUtils.getHomeDirectory(), ".claude", "settings.json");
                 if (!Files.exists(settingsPath)) {
@@ -297,7 +318,7 @@ public class ClaudeProviderOperations {
                 return;
             }
 
-            if ("__cli_login__".equals(id)) {
+            if (ProviderManager.CLI_LOGIN_PROVIDER_ID.equals(id)) {
                 // Apply CLI login mode to settings.json
                 context.getSettingsService().applyCliLoginToClaudeSettings();
 
@@ -336,7 +357,9 @@ public class ClaudeProviderOperations {
             context.getSettingsService().applyActiveProviderToClaudeSettings();
 
             ApplicationManager.getApplication().invokeLater(() -> {
-                context.callJavaScript("window.showSwitchSuccess", context.escapeJs(com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchSuccess") + com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("provider.switchSyncClaude")));
+                String successMsg = com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("toast.providerSwitchSuccess")
+                        + com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("provider.switchSyncClaude");
+                context.callJavaScript("window.showSwitchSuccess", context.escapeJs(successMsg));
                 handleGetProviders();
                 handleGetActiveProvider();
             });

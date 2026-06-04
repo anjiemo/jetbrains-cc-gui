@@ -11,7 +11,6 @@ import com.intellij.psi.PsiNameIdentifierOwner;
 import com.intellij.psi.PsiNamedElement;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.jetbrains.python.psi.*;
-import org.jetbrains.annotations.NotNull;
 
 /**
  * Python-specific context collection.
@@ -57,7 +56,7 @@ public class PythonContextCollector {
     private static JsonObject getCurrentScope(PsiFile psiFile, int offset) {
         JsonObject scope = new JsonObject();
         PsiElement element = psiFile.findElementAt(offset);
-        if (element == null) return null;
+        if (element == null) { return null; }
 
         PyFunction pyFunction = PsiTreeUtil.getParentOfType(element, PyFunction.class);
         PyClass pyClass = PsiTreeUtil.getParentOfType(element, PyClass.class);
@@ -77,15 +76,23 @@ public class PythonContextCollector {
                 }
             }
 
-            if (pyFunction instanceof PyDocStringOwner) {
-                try {
-                    String docString = ((PyDocStringOwner) pyFunction).getDocStringValue();
-                    if (docString != null) {
-                        scope.addProperty("docstring", docString);
+            // Extract docstring via PSI tree traversal to avoid experimental API
+            try {
+                PyStatementList statementList = pyFunction.getStatementList();
+                if (statementList != null) {
+                    PyStatement[] statements = statementList.getStatements();
+                    if (statements.length > 0 && statements[0] instanceof PyExpressionStatement) {
+                        PyExpression expr = ((PyExpressionStatement) statements[0]).getExpression();
+                        if (expr instanceof PyStringLiteralExpression) {
+                            String docString = extractStringLiteralText((PyStringLiteralExpression) expr);
+                            if (docString != null) {
+                                scope.addProperty("docstring", docString);
+                            }
+                        }
                     }
-                } catch (Exception e) {
-                    // ignore - docstring is optional
                 }
+            } catch (Exception e) {
+                // ignore - docstring is optional
             }
 
             // Args
@@ -128,6 +135,38 @@ public class PythonContextCollector {
         }
 
         return scope.size() > 0 ? scope : null;
+    }
+
+    private static String extractStringLiteralText(PyStringLiteralExpression expression) {
+        // Both PyAstStringElement#getContent() (experimental) and getStringValue()
+        // (Marketplace-flagged) are off limits, and the verifier cannot resolve Python
+        // APIs locally (IU bundles no Python plugin). Derive the value from the stable
+        // PsiElement#getText() and strip the Python string prefix/quotes manually.
+        String raw = expression.getText();
+        if (raw == null) {
+            return null;
+        }
+        String content = stripPythonStringLiteral(raw.trim());
+        return content.isEmpty() ? null : content;
+    }
+
+    /**
+     * Strip an optional Python string prefix (r/b/f/u and combinations) and the
+     * surrounding single or triple quotes from a string literal's raw source text.
+     */
+    private static String stripPythonStringLiteral(String text) {
+        int start = 0;
+        while (start < text.length() && "rbfuRBFU".indexOf(text.charAt(start)) >= 0) {
+            start++;
+        }
+        String body = text.substring(start);
+        for (String quote : new String[] {"\"\"\"", "'''", "\"", "'"}) {
+            int len = quote.length();
+            if (body.length() >= 2 * len && body.startsWith(quote) && body.endsWith(quote)) {
+                return body.substring(len, body.length() - len);
+            }
+        }
+        return body;
     }
     
     private static JsonArray getImports(PyFile pyFile) {

@@ -1,6 +1,7 @@
 package com.github.claudecodegui.notifications;
 
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
+import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.wm.CustomStatusBarWidget;
@@ -79,7 +80,7 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
             label.addMouseListener(new MouseAdapter() {
                 @Override
                 public void mouseClicked(MouseEvent e) {
-                    if (project.isDisposed()) return;
+                    if (project.isDisposed()) { return; }
                     var toolWindow = ToolWindowManager.getInstance(project).getToolWindow("CCG");
                     if (toolWindow != null) {
                         toolWindow.activate(null);
@@ -162,9 +163,9 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
         // Add Model Info (Shorten names)
         if (model != null && !model.isEmpty()) {
             String shortModel = model;
-            if (model.contains("sonnet")) shortModel = "Sonnet";
-            else if (model.contains("opus")) shortModel = "Opus";
-            else if (model.contains("haiku")) shortModel = "Haiku";
+            if (model.contains("sonnet")) { shortModel = "Sonnet"; }
+            else if (model.contains("opus")) { shortModel = "Opus"; }
+            else if (model.contains("haiku")) { shortModel = "Haiku"; }
             text.append(" [").append(shortModel).append("]");
         }
 
@@ -206,7 +207,7 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
     }
 
     public void show(String text, String tooltip, long durationMs) {
-        if (disposed) return;
+        if (disposed) { return; }
         // Stop any existing timer to prevent resource leaks
         if (hideTimer != null) {
             hideTimer.stop();
@@ -220,7 +221,7 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
     }
 
     public void hide() {
-        if (disposed) return;
+        if (disposed) { return; }
         if (System.currentTimeMillis() >= visibleUntil.get()) {
             // Revert to standard display
             refreshDisplay(null);
@@ -228,7 +229,7 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
     }
 
     private void updateLabel(String text, String tooltip) {
-        if (disposed) return;
+        if (disposed) { return; }
         textRef.set(text);
         tooltipRef.set(tooltip);
         if (ApplicationManager.getApplication().isDispatchThread()) {
@@ -239,12 +240,12 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
     }
 
     private void updateLabelOnEdt(String text, String tooltip) {
-        if (disposed) return;
+        if (disposed) { return; }
         if (label != null) {
             label.setText(text);
             label.setToolTipText(tooltip);
         }
-        if (statusBar != null) statusBar.updateWidget(ID());
+        if (statusBar != null) { statusBar.updateWidget(ID()); }
     }
 
     public static class Factory implements StatusBarWidgetFactory {
@@ -260,7 +261,12 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
 
         @Override
         public boolean isAvailable(@NotNull Project project) {
-            return project != null;
+            if (project == null) { return false; }
+            try {
+                return new CodemossSettingsService().getStatusBarWidgetEnabled();
+            } catch (Exception e) {
+                return true;
+            }
         }
 
         @Override
@@ -278,7 +284,7 @@ public class ClaudeStatusBarWidget implements CustomStatusBarWidget, StatusBarWi
             StatusBar statusBar = WindowManager.getInstance().getStatusBar(project);
             if (statusBar != null) {
                 StatusBarWidget widget = statusBar.getWidget("ClaudeStatusBarWidget");
-                if (widget instanceof ClaudeStatusBarWidget) return (ClaudeStatusBarWidget) widget;
+                if (widget instanceof ClaudeStatusBarWidget) { return (ClaudeStatusBarWidget) widget; }
             }
             return null;
         }

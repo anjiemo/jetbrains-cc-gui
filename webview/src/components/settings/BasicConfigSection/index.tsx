@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import styles from './style.module.less';
 import { useTranslation } from 'react-i18next';
+import type { DiffThemeMode } from '../../../utils/diffTheme';
+import type { UiFontConfig, CodeFontConfig } from '../hooks/useSettingsBasicActions';
 import AppearanceTab from './AppearanceTab';
 import BehaviorTab from './BehaviorTab';
 import EnvironmentTab from './EnvironmentTab';
@@ -33,6 +35,14 @@ interface BasicConfigSectionProps {
     fontSize: number;
     lineSpacing: number;
   };
+  uiFontConfig?: UiFontConfig;
+  codeFontConfig?: CodeFontConfig;
+  onUiFontSelectionChange?: (selection: string) => void;
+  onSaveUiFontCustomPath?: (path: string) => void;
+  onBrowseUiFontFile?: () => void;
+  onCodeFontSelectionChange?: (selection: string) => void;
+  onSaveCodeFontCustomPath?: (path: string) => void;
+  onBrowseCodeFontFile?: () => void;
   // Streaming configuration
   streamingEnabled?: boolean;
   onStreamingEnabledChange?: (enabled: boolean) => void;
@@ -48,9 +58,24 @@ interface BasicConfigSectionProps {
   // User message bubble color configuration
   userMsgColor?: string;
   onUserMsgColorChange?: (color: string) => void;
+  // Diff theme configuration
+  diffTheme?: DiffThemeMode;
+  onDiffThemeChange?: (theme: DiffThemeMode) => void;
   // Diff expanded by default configuration
   diffExpandedByDefault?: boolean;
   onDiffExpandedByDefaultChange?: (enabled: boolean) => void;
+  // AI commit generation configuration
+  commitGenerationEnabled?: boolean;
+  onCommitGenerationEnabledChange?: (enabled: boolean) => void;
+  // Status bar widget configuration
+  statusBarWidgetEnabled?: boolean;
+  onStatusBarWidgetEnabledChange?: (enabled: boolean) => void;
+  // AI title generation configuration
+  aiTitleGenerationEnabled?: boolean;
+  onAiTitleGenerationEnabledChange?: (enabled: boolean) => void;
+  // New-session confirm dialog (positive semantics: true = shown)
+  newSessionConfirmEnabled?: boolean;
+  onNewSessionConfirmEnabledChange?: (enabled: boolean) => void;
   // Sound notification configuration
   soundNotificationEnabled?: boolean;
   onSoundNotificationEnabledChange?: (enabled: boolean) => void;
@@ -63,6 +88,12 @@ interface BasicConfigSectionProps {
   onSaveCustomSoundPath?: () => void;
   onTestSound?: () => void;
   onBrowseSound?: () => void;
+  // Task completion notification configuration
+  taskCompletionNotificationEnabled?: boolean;
+  onTaskCompletionNotificationEnabledChange?: (enabled: boolean) => void;
+  // Permission dialog timeout configuration
+  permissionDialogTimeoutSeconds?: number;
+  onPermissionDialogTimeoutChange?: (seconds: number) => void;
 }
 
 const BasicConfigSection = (props: BasicConfigSectionProps) => {
@@ -96,10 +127,20 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           fontSizeLevel={props.fontSizeLevel}
           onFontSizeLevelChange={props.onFontSizeLevelChange}
           editorFontConfig={props.editorFontConfig}
+          uiFontConfig={props.uiFontConfig}
+          codeFontConfig={props.codeFontConfig}
+          onUiFontSelectionChange={props.onUiFontSelectionChange}
+          onSaveUiFontCustomPath={props.onSaveUiFontCustomPath}
+          onBrowseUiFontFile={props.onBrowseUiFontFile}
+          onCodeFontSelectionChange={props.onCodeFontSelectionChange}
+          onSaveCodeFontCustomPath={props.onSaveCodeFontCustomPath}
+          onBrowseCodeFontFile={props.onBrowseCodeFontFile}
           chatBgColor={props.chatBgColor}
           onChatBgColorChange={props.onChatBgColorChange}
           userMsgColor={props.userMsgColor}
           onUserMsgColorChange={props.onUserMsgColorChange}
+          diffTheme={props.diffTheme}
+          onDiffThemeChange={props.onDiffThemeChange}
         />
       )}
 
@@ -113,6 +154,14 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onAutoOpenFileEnabledChange={props.onAutoOpenFileEnabledChange}
           diffExpandedByDefault={props.diffExpandedByDefault}
           onDiffExpandedByDefaultChange={props.onDiffExpandedByDefaultChange}
+          commitGenerationEnabled={props.commitGenerationEnabled}
+          onCommitGenerationEnabledChange={props.onCommitGenerationEnabledChange}
+          statusBarWidgetEnabled={props.statusBarWidgetEnabled}
+          onStatusBarWidgetEnabledChange={props.onStatusBarWidgetEnabledChange}
+          aiTitleGenerationEnabled={props.aiTitleGenerationEnabled}
+          onAiTitleGenerationEnabledChange={props.onAiTitleGenerationEnabledChange}
+          newSessionConfirmEnabled={props.newSessionConfirmEnabled}
+          onNewSessionConfirmEnabledChange={props.onNewSessionConfirmEnabledChange}
           soundNotificationEnabled={props.soundNotificationEnabled}
           onSoundNotificationEnabledChange={props.onSoundNotificationEnabledChange}
           soundOnlyWhenUnfocused={props.soundOnlyWhenUnfocused}
@@ -124,6 +173,10 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onSaveCustomSoundPath={props.onSaveCustomSoundPath}
           onTestSound={props.onTestSound}
           onBrowseSound={props.onBrowseSound}
+          taskCompletionNotificationEnabled={props.taskCompletionNotificationEnabled}
+          onTaskCompletionNotificationEnabledChange={props.onTaskCompletionNotificationEnabledChange}
+          permissionDialogTimeoutSeconds={props.permissionDialogTimeoutSeconds}
+          onPermissionDialogTimeoutChange={props.onPermissionDialogTimeoutChange}
         />
       )}
 

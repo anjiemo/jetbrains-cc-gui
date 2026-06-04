@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { TFunction } from 'i18next';
 import type { MutableRefObject, RefObject } from 'react';
-import type { ClaudeMessage, ClaudeRawMessage, HistoryData } from '../types';
+import type { ClaudeMessage, ClaudeRawMessage, HistoryData, SubagentHistoryResponse } from '../types';
 import type { PermissionMode, SelectedAgent } from '../components/ChatInputBox/types';
 import type { ProviderConfig } from '../types/provider';
 import type { PermissionRequest } from '../components/PermissionDialog';
@@ -49,6 +49,7 @@ export interface UseWindowCallbacksOptions {
   setStreamingEnabledSetting: React.Dispatch<React.SetStateAction<boolean>>;
   setSendShortcut: React.Dispatch<React.SetStateAction<'enter' | 'cmdEnter'>>;
   setAutoOpenFileEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  setPermissionDialogTimeoutSeconds: React.Dispatch<React.SetStateAction<number>>;
   setSdkStatus: React.Dispatch<React.SetStateAction<Record<string, { installed?: boolean; status?: string }>>>;
   setSdkStatusLoaded: React.Dispatch<React.SetStateAction<boolean>>;
   setIsRewinding: (loading: boolean) => void;
@@ -56,6 +57,7 @@ export interface UseWindowCallbacksOptions {
   setCurrentRewindRequest: (request: RewindRequest | null) => void;
   setContextInfo: React.Dispatch<React.SetStateAction<ContextInfo | null>>;
   setSelectedAgent: React.Dispatch<React.SetStateAction<SelectedAgent | null>>;
+  setSubagentHistories?: React.Dispatch<React.SetStateAction<Record<string, SubagentHistoryResponse>>>;
 
   // Refs
   currentProviderRef: MutableRefObject<string>;
@@ -66,21 +68,17 @@ export interface UseWindowCallbacksOptions {
 
   // Streaming refs from useStreamingMessages
   streamingContentRef: MutableRefObject<string>;
+  streamingThinkingRef: MutableRefObject<string>;
   isStreamingRef: MutableRefObject<boolean>;
   useBackendStreamingRenderRef: MutableRefObject<boolean>;
   autoExpandedThinkingKeysRef: MutableRefObject<Set<string>>;
-  streamingTextSegmentsRef: MutableRefObject<string[]>;
-  activeTextSegmentIndexRef: MutableRefObject<number>;
-  streamingThinkingSegmentsRef: MutableRefObject<string[]>;
-  activeThinkingSegmentIndexRef: MutableRefObject<number>;
-  seenToolUseCountRef: MutableRefObject<number>;
   streamingMessageIndexRef: MutableRefObject<number>;
   streamingTurnIdRef: MutableRefObject<number>;
   turnIdCounterRef: MutableRefObject<number>;
   lastContentUpdateRef: MutableRefObject<number>;
-  contentUpdateTimeoutRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
+  contentUpdateTimeoutRef: MutableRefObject<number | null>;
   lastThinkingUpdateRef: MutableRefObject<number>;
-  thinkingUpdateTimeoutRef: MutableRefObject<ReturnType<typeof setTimeout> | null>;
+  thinkingUpdateTimeoutRef: MutableRefObject<number | null>;
 
   // Functions from useStreamingMessages
   findLastAssistantIndex: (messages: ClaudeMessage[]) => number;
@@ -95,11 +93,21 @@ export interface UseWindowCallbacksOptions {
   openPermissionDialog: (request: PermissionRequest) => void;
   openAskUserQuestionDialog: (request: AskUserQuestionRequest) => void;
   openPlanApprovalDialog: (request: PlanApprovalRequest) => void;
+  openContextUsageDialog: (requestId?: string | null, loading?: boolean) => void;
+  updateContextUsageData: (
+    requestId: string | null | undefined,
+    data: import('../components/ContextUsageDialog').ContextUsageData,
+  ) => boolean;
+  closeContextUsageDialog: (requestId?: string | null) => boolean;
 
   // B-011: Title migration on session ID change
   customSessionTitleRef: MutableRefObject<string | null>;
   currentSessionIdRef: MutableRefObject<string | null>;
   updateHistoryTitle: (sessionId: string, newTitle: string) => void;
+  applyHistoryTitleLocal: (sessionId: string, newTitle: string) => void;
+
+  // AI title generation: update the displayed session title when backend generates one
+  setCustomSessionTitle: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
 export function useWindowCallbacks(options: UseWindowCallbacksOptions): void {

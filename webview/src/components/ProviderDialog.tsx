@@ -3,13 +3,26 @@ import { useTranslation } from 'react-i18next';
 import type { ProviderConfig } from '../types/provider';
 import { CLAUDE_MODEL_MAPPING_ENV_KEYS, PROVIDER_PRESETS } from '../types/provider';
 
+const INFO_ICON_STYLE: React.CSSProperties = { fontSize: '12px', marginRight: '4px' };
+const NOTICE_MT_STYLE: React.CSSProperties = { marginTop: '8px' };
+const SECTION_DESC_STYLE: React.CSSProperties = { marginBottom: '12px', fontSize: '12px', color: '#999' };
+const FOOTER_ACTIONS_STYLE: React.CSSProperties = { marginLeft: 'auto' };
+
 const OFFICIAL_DIRECT_PRESET_ID = 'official_direct';
 const OFFICIAL_ANTHROPIC_URL = 'https://api.anthropic.com';
 const CUSTOM_PRESET_ID = 'custom';
+const CUSTOM_PROXY_PRESET_ID = 'custom_proxy';
 
 const isOfficialAnthropicEndpoint = (baseUrl?: string) => {
   const normalized = (baseUrl || '').trim().toLowerCase();
-  return normalized === '' || normalized.includes('api.anthropic.com');
+  if (normalized === '') return true;
+  try {
+    const url = new URL(normalized);
+    return url.hostname === 'api.anthropic.com';
+  } catch {
+    // Invalid URL cannot be an official endpoint
+    return false;
+  }
 };
 
 interface BuildConfigOptions {
@@ -20,6 +33,10 @@ interface BuildConfigOptions {
 
 const trimString = (value: unknown): string => (
   typeof value === 'string' ? value.trim() : ''
+);
+
+const readHaikuModel = (env: Record<string, unknown>): string => (
+  trimString(env.ANTHROPIC_DEFAULT_HAIKU_MODEL)
 );
 
 export function normalizeProviderEnvForSave(
@@ -118,7 +135,9 @@ export default function ProviderDialog({
   const [jsonError, setJsonError] = useState('');
   const thirdPartyPresets = PROVIDER_PRESETS;
   const isOfficialDirectMode = activePreset === OFFICIAL_DIRECT_PRESET_ID;
-  const showModelMappingSection = activePreset !== CUSTOM_PRESET_ID;
+  // Model mapping should always be shown – the 'custom' preset button was removed
+  // from the UI, so users can never explicitly opt out of model mapping.
+  const showModelMappingSection = true;
 
   const buildConfig = ({
     envOverrides = {},
@@ -214,7 +233,7 @@ export default function ProviderDialog({
     const env = preset.env;
     setApiUrl(env.ANTHROPIC_BASE_URL || '');
     setApiKey(env.ANTHROPIC_AUTH_TOKEN || '');
-    setHaikuModel(env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '');
+    setHaikuModel(readHaikuModel(env));
     setSonnetModel(env.ANTHROPIC_DEFAULT_SONNET_MODEL || '');
     setOpusModel(env.ANTHROPIC_DEFAULT_OPUS_MODEL || '');
     setJsonError('');
@@ -235,7 +254,9 @@ export default function ProviderDialog({
         return preset.id;
       }
     }
-    return 'custom';
+    // Unrecognized URL: treat as a custom third-party proxy.
+    // Return a non-'custom' value so model mapping stays enabled.
+    return CUSTOM_PROXY_PRESET_ID;
   };
 
   // Format JSON
@@ -265,7 +286,7 @@ export default function ProviderDialog({
         // Auto-detect matching preset
         setActivePreset(detectMatchingPreset(env));
 
-        setHaikuModel(env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '');
+        setHaikuModel(readHaikuModel(env));
         setSonnetModel(env.ANTHROPIC_DEFAULT_SONNET_MODEL || '');
         setOpusModel(env.ANTHROPIC_DEFAULT_OPUS_MODEL || '');
 
@@ -359,7 +380,7 @@ export default function ProviderDialog({
       setActivePreset(detectMatchingPreset(env));
 
       if (Object.prototype.hasOwnProperty.call(env, 'ANTHROPIC_DEFAULT_HAIKU_MODEL')) {
-        setHaikuModel(env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '');
+        setHaikuModel(readHaikuModel(env));
       } else {
         setHaikuModel('');
       }
@@ -557,13 +578,13 @@ export default function ProviderDialog({
               readOnly={isOfficialDirectMode}
             />
             <small className="form-hint">
-              <span className="codicon codicon-info" style={{ fontSize: '12px', marginRight: '4px' }} />
+              <span className="codicon codicon-info" style={INFO_ICON_STYLE} />
               {isOfficialDirectMode
                 ? t('settings.provider.dialog.apiUrlLockedHint')
                 : t('settings.provider.dialog.apiUrlHint')}
             </small>
             {!isOfficialAnthropicEndpoint(apiUrl) && (
-              <div className="notice-box notice-box--warning" style={{ marginTop: '8px' }}>
+              <div className="notice-box notice-box--warning" style={NOTICE_MT_STYLE}>
                 <span className="codicon codicon-cloud" />
                 {t('settings.provider.dialog.proxyEndpointWarning')}
               </div>
@@ -573,8 +594,8 @@ export default function ProviderDialog({
           {showModelMappingSection && (
             <div className="form-group">
               <label>{t('settings.provider.dialog.modelMapping')}</label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                <div>
+              <div className="model-mapping-grid">
+                <div className="model-mapping-field">
                   <label htmlFor="sonnetModel">{t('settings.provider.dialog.sonnetModel')}</label>
                   <input
                     id="sonnetModel"
@@ -585,7 +606,7 @@ export default function ProviderDialog({
                     onChange={handleSonnetModelChange}
                   />
                 </div>
-                <div>
+                <div className="model-mapping-field">
                   <label htmlFor="opusModel">{t('settings.provider.dialog.opusModel')}</label>
                   <input
                     id="opusModel"
@@ -596,7 +617,7 @@ export default function ProviderDialog({
                     onChange={handleOpusModelChange}
                   />
                 </div>
-                <div>
+                <div className="model-mapping-field">
                   <label htmlFor="haikuModel">{t('settings.provider.dialog.haikuModel')}</label>
                   <input
                     id="haikuModel"
@@ -618,7 +639,7 @@ export default function ProviderDialog({
               {t('settings.provider.dialog.jsonConfig')}
             </summary>
             <div className="json-config-section">
-              <p className="section-desc" style={{ marginBottom: '12px', fontSize: '12px', color: '#999' }}>
+              <p className="section-desc" style={SECTION_DESC_STYLE}>
                 {t('settings.provider.dialog.jsonConfigDescription')}
               </p>
 
@@ -668,7 +689,7 @@ export default function ProviderDialog({
         </div>
 
         <div className="dialog-footer">
-          <div className="footer-actions" style={{ marginLeft: 'auto' }}>
+          <div className="footer-actions" style={FOOTER_ACTIONS_STYLE}>
             <button className="btn btn-secondary" onClick={onClose}>
               <span className="codicon codicon-close" />
               {t('common.cancel')}

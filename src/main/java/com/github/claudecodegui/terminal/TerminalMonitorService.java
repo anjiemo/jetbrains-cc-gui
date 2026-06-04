@@ -3,30 +3,45 @@ package com.github.claudecodegui.terminal;
 import com.intellij.execution.process.ProcessEvent;
 import com.intellij.execution.process.ProcessHandler;
 import com.intellij.execution.process.ProcessListener;
+import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.actionSystem.ActionGroup;
+import com.intellij.openapi.actionSystem.ActionManager;
+import com.intellij.openapi.actionSystem.AnAction;
+import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.startup.ProjectActivity;
 import com.intellij.openapi.util.Disposer;
+import com.intellij.openapi.util.CheckedDisposable;
 import com.intellij.openapi.util.Key;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener;
+import com.intellij.terminal.JBTerminalWidget;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentManager;
 import com.intellij.ui.content.ContentManagerEvent;
 import com.intellij.ui.content.ContentManagerListener;
+import com.jediterm.terminal.ui.TerminalActionProvider;
 import kotlin.Unit;
 import kotlin.coroutines.Continuation;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.stream.Collectors;
 
 /**
  * Service to monitor terminal output and user input (echoed).
@@ -50,6 +65,7 @@ import java.util.WeakHashMap;
 public class TerminalMonitorService implements ProjectActivity {
 
     private static final Logger LOG = Logger.getInstance(TerminalMonitorService.class);
+    private static final String EDITOR_POPUP_MENU = "EditorPopupMenu";
 
     /**
      * Tracked terminal widgets using WeakHashMap to prevent memory leaks.
@@ -57,6 +73,8 @@ public class TerminalMonitorService implements ProjectActivity {
      * Wrapped with synchronizedSet for thread-safe access.
      */
     private static final Set<Object> monitoredWidgets =
+            Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+    private static final Set<Object> legacyActionInstalledWidgets =
             Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
     /**
@@ -66,78 +84,114 @@ public class TerminalMonitorService implements ProjectActivity {
     private static final Map<Object, StringBuilder> buffers = Collections.synchronizedMap(new WeakHashMap<>());
 
     private static final int MAX_BUFFER_SIZE = 100000; // Keep last 100k chars
-    private boolean contentHandlerAttached = false;
+
+    private static final class ProjectMonitorState {
+        private final CheckedDisposable listenerDisposable;
+        private ContentManager attachedContentManager;
+        private boolean actionDiagnosticsLogged;
+
+        private ProjectMonitorState(@NotNull String locationHash) {
+            this.listenerDisposable = Disposer.newCheckedDisposable("TerminalMonitorService:" + locationHash);
+        }
+    }
 
     @Nullable
     @Override
     public Object execute(@NotNull Project project, @NotNull Continuation<? super Unit> continuation) {
-        monitorTerminals(project);
+        ProjectMonitorState state = new ProjectMonitorState(project.getLocationHash());
+        Disposer.register(project, state.listenerDisposable);
+        monitorTerminals(project, state);
         return Unit.INSTANCE;
     }
 
-    private void monitorTerminals(@NotNull Project project) {
+    private void monitorTerminals(@NotNull Project project, @NotNull ProjectMonitorState state) {
         // Listen for Terminal ToolWindow changes to attach to the window when it appears
-        project.getMessageBus().connect().subscribe(ToolWindowManagerListener.TOPIC, new ToolWindowManagerListener() {
+        project.getMessageBus().connect(state.listenerDisposable).subscribe(ToolWindowManagerListener.TOPIC, new ToolWindowManagerListener() {
             @Override
             public void stateChanged(@NotNull ToolWindowManager toolWindowManager) {
                 // Check if Terminal window is available (e.g. after being hidden/shown or registered)
-                setupTerminalListener(project);
+                setupTerminalListener(project, state);
             }
         });
 
         // Initial check
-        setupTerminalListener(project);
+        setupTerminalListener(project, state);
     }
 
-    private void setupTerminalListener(@NotNull Project project) {
+    private void setupTerminalListener(@NotNull Project project, @NotNull ProjectMonitorState state) {
         // ContentManager access requires EDT, so schedule this on EDT
         ApplicationManager.getApplication().invokeLater(() -> {
-            if (project.isDisposed()) return;
+            if (project.isDisposed() || state.listenerDisposable.isDisposed()) { return; }
+
+            ensureReworkedTerminalMenuRegistration();
 
             ToolWindow terminalWindow = ToolWindowManager.getInstance(project).getToolWindow("Terminal");
-            if (terminalWindow == null) return;
+            if (terminalWindow == null) { return; }
+
+            ContentManager contentManager = terminalWindow.getContentManager();
+            if (contentManager.isDisposed()) { return; }
+
+            if (!state.actionDiagnosticsLogged) {
+                logTerminalActionRegistration();
+                state.actionDiagnosticsLogged = true;
+            }
 
             // Attach listener to ContentManager to detect new tabs (Terminals)
-            if (!contentHandlerAttached) {
-                terminalWindow.getContentManager().addContentManagerListener(new ContentManagerListener() {
+            if (state.attachedContentManager != contentManager) {
+                ContentManagerListener listener = new ContentManagerListener() {
                     @Override
                     public void contentAdded(@NotNull ContentManagerEvent event) {
                         // When a new tab is added, check for new widgets
-                        checkForNewWidgets(project);
+                        checkForNewWidgets(project, state);
+                    }
+                };
+                contentManager.addContentManagerListener(listener);
+                Disposer.register(state.listenerDisposable, () -> {
+                    if (!contentManager.isDisposed()) {
+                        contentManager.removeContentManagerListener(listener);
                     }
                 });
-                contentHandlerAttached = true;
+                Disposer.register(contentManager, () -> {
+                    if (state.attachedContentManager == contentManager) {
+                        state.attachedContentManager = null;
+                    }
+                });
+                state.attachedContentManager = contentManager;
                 LOG.debug("Terminal content listener attached for project: " + project.getName());
             }
 
             // Always check for existing widgets (in case we missed some or just started)
-            checkForNewWidgets(project);
-        });
+            checkForNewWidgets(project, state);
+        }, project.getDisposed());
     }
 
-    private void checkForNewWidgets(@NotNull Project project) {
+    private void checkForNewWidgets(@NotNull Project project, @NotNull ProjectMonitorState state) {
+        if (project.isDisposed() || state.listenerDisposable.isDisposed()) { return; }
+
         try {
             Class<?> viewClass = Class.forName("org.jetbrains.plugins.terminal.TerminalView");
             Object view = viewClass.getMethod("getInstance", Project.class).invoke(null, project);
-            if (view == null) return;
-            
+            if (view == null) { return; }
+
             Object result = viewClass.getMethod("getWidgets").invoke(view);
             List<Object> widgets = convertResultToList(result);
             for (Object widget : widgets) {
                 if (!monitoredWidgets.contains(widget)) {
-                    attachToWidget(widget);
+                    attachToWidget(project, state, widget);
                 }
             }
         } catch (ClassNotFoundException e) {
             // Gracefully handle if Terminal plugin is not enabled/loaded
             LOG.warn("Terminal plugin classes not found. Monitoring disabled.");
+        } catch (ProcessCanceledException e) {
+            throw e;
         } catch (Exception e) {
             LOG.error("Error checking for terminal widgets", e);
         }
     }
 
-    private void attachToWidget(@NotNull Object widget) {
-        if (monitoredWidgets.contains(widget)) return;
+    private void attachToWidget(@NotNull Project project, @NotNull ProjectMonitorState state, @NotNull Object widget) {
+        if (monitoredWidgets.contains(widget)) { return; }
 
         monitoredWidgets.add(widget);
         String title = "Unknown";
@@ -147,28 +201,30 @@ public class TerminalMonitorService implements ProjectActivity {
                 title = (String) terminalTitle.getClass().getMethod("getText").invoke(terminalTitle);
             }
         } catch (Exception e) {
-            // ignore
+            LOG.debug("Failed to get terminal widget title", e);
         }
         LOG.debug("Monitoring terminal widget: " + title + " (Class: " + widget.getClass().getName() + ")");
+        installLegacySendAction(widget);
 
         // Handle disposal
-        if (widget instanceof com.intellij.openapi.Disposable) {
-            Disposer.register((com.intellij.openapi.Disposable) widget, () -> {
+        if (widget instanceof Disposable) {
+            Disposer.register((Disposable) widget, () -> {
                 LOG.debug("Terminal widget disposed: " + TerminalMonitorService.getWidgetTitle(widget));
                 monitoredWidgets.remove(widget);
+                legacyActionInstalledWidgets.remove(widget);
                 buffers.remove(widget);
             });
         }
 
         // Attach ProcessListener to capture output
         try {
-            java.lang.reflect.Method getHandlerMethod = null;
+            Method getHandlerMethod = null;
             String[] possibleHandlerMethods = {"getTerminalProcessHandler", "getProcessHandler"};
             
             for (String methodName : possibleHandlerMethods) {
                 try {
                     getHandlerMethod = widget.getClass().getMethod(methodName);
-                    if (getHandlerMethod != null) break;
+                    if (getHandlerMethod != null) { break; }
                 } catch (NoSuchMethodException e) {
                     // continue
                 }
@@ -178,66 +234,129 @@ public class TerminalMonitorService implements ProjectActivity {
                 ProcessHandler processHandler = (ProcessHandler) getHandlerMethod.invoke(widget);
                 if (processHandler != null) {
                     LOG.debug("Attached ProcessListener to terminal: " + title + " using " + getHandlerMethod.getName());
-                    processHandler.addProcessListener(new ProcessListener() {
-                        @Override
-                        public void onTextAvailable(@NotNull ProcessEvent event, @NotNull Key outputType) {
-                            String text = event.getText();
-                            if (text != null && !text.isEmpty()) {
-                                StringBuilder sb = buffers.computeIfAbsent(widget, k -> new StringBuilder());
-                                synchronized (sb) {
-                                    sb.append(text);
-                                    if (sb.length() > MAX_BUFFER_SIZE) {
-                                        sb.delete(0, sb.length() - MAX_BUFFER_SIZE);
-                                    }
-                                }
+                    if (widget instanceof Disposable) {
+                        ProcessListener listener = new ProcessListener() {
+                            @Override
+                            public void onTextAvailable(@NotNull ProcessEvent event, @NotNull Key outputType) {
+                                appendCapturedText(widget, event.getText());
                             }
-                        }
-                    });
+                        };
+                        processHandler.addProcessListener(listener, (Disposable) widget);
+                    } else {
+                        WeakReference<Object> widgetRef = new WeakReference<>(widget);
+                        ProcessListener listener = new ProcessListener() {
+                            @Override
+                            public void onTextAvailable(@NotNull ProcessEvent event, @NotNull Key outputType) {
+                                Object currentWidget = widgetRef.get();
+                                if (currentWidget == null) {
+                                    processHandler.removeProcessListener(this);
+                                    return;
+                                }
+                                appendCapturedText(currentWidget, event.getText());
+                            }
+
+                            @Override
+                            public void processTerminated(@NotNull ProcessEvent event) {
+                                processHandler.removeProcessListener(this);
+                            }
+                        };
+                        processHandler.addProcessListener(listener, state.listenerDisposable);
+                    }
                 } else {
                     LOG.warn("ProcessHandler is null for terminal: " + title);
                 }
             } else {
                 LOG.warn("Could not find getTerminalProcessHandler method in " + widget.getClass().getName());
             }
+        } catch (ProcessCanceledException e) {
+            throw e;
         } catch (Exception e) {
             LOG.warn("Failed to attach process listener to widget: " + e.getMessage(), e);
         }
     }
 
+    private static void appendCapturedText(@NotNull Object widget, @Nullable String text) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+
+        StringBuilder sb;
+        synchronized (buffers) {
+            sb = buffers.computeIfAbsent(widget, k -> new StringBuilder());
+        }
+        synchronized (sb) {
+            sb.append(text);
+            if (sb.length() > MAX_BUFFER_SIZE) {
+                sb.delete(0, sb.length() - MAX_BUFFER_SIZE);
+            }
+        }
+    }
+
     /**
      * Get all active terminal widgets for a project.
-     * Returns List<Object> to avoid dependency issues.
+     * Returns List&lt;Object&gt; to avoid dependency issues.
+     *
+     * <p>This method can be called from any thread. Visual tab-order sorting is only attempted
+     * on EDT because ToolWindow and ContentManager are UI components. Background callers always get a
+     * stable fallback order to avoid blocking on EDT.</p>
+     *
+     * @param project the project to get terminal widgets for
+     * @return sorted list of terminal widgets by their tab order when available
      */
     public static List<Object> getWidgets(@NotNull Project project) {
         try {
             Class<?> viewClass = Class.forName("org.jetbrains.plugins.terminal.TerminalView");
             Object view = viewClass.getMethod("getInstance", Project.class).invoke(null, project);
-            if (view == null) return List.of();
+            if (view == null) { return List.of(); }
 
             Object result = viewClass.getMethod("getWidgets").invoke(view);
-            List<Object> widgets = convertResultToList(result);
-            
-            // Sort widgets based on their visual tab order in the tool window
-            java.util.List<Object> sortedWidgets = new java.util.ArrayList<>(widgets);
-            try {
-                com.intellij.openapi.wm.ToolWindow window = com.intellij.openapi.wm.ToolWindowManager.getInstance(project).getToolWindow("Terminal");
-                if (window != null) {
-                    com.intellij.ui.content.ContentManager cm = window.getContentManager();
-                    sortedWidgets.sort((w1, w2) -> {
-                        int i1 = findWidgetIndex(cm, w1);
-                        int i2 = findWidgetIndex(cm, w2);
-                        return Integer.compare(i1, i2);
-                    });
-                }
-            } catch (Exception e) {
-                // Fallback to identity hash if UI-based sorting fails
-                sortedWidgets.sort(java.util.Comparator.comparingInt(System::identityHashCode));
+            List<Object> sortedWidgets = new ArrayList<>(convertResultToList(result));
+
+            if (ApplicationManager.getApplication().isDispatchThread()) {
+                sortWidgetsByTabOrder(project, sortedWidgets);
+            } else {
+                sortWidgetsByIdentity(sortedWidgets);
             }
+
             return sortedWidgets;
+        } catch (ProcessCanceledException e) {
+            throw e;
         } catch (Exception e) {
             LOG.warn("Failed to get terminal widgets", e);
             return List.of();
         }
+    }
+
+    /**
+     * Sort widgets by their tab order in the terminal tool window.
+     * This method must be called on EDT.
+     *
+     * @param project the project containing the terminal tool window
+     * @param widgets the list of widgets to sort in place
+     */
+    private static void sortWidgetsByTabOrder(@NotNull Project project, List<Object> widgets) {
+        ApplicationManager.getApplication().assertIsDispatchThread();
+        try {
+            ToolWindow window = ToolWindowManager.getInstance(project).getToolWindow("Terminal");
+            if (window != null) {
+                ContentManager cm = window.getContentManager();
+                widgets.sort((w1, w2) -> {
+                    int i1 = findWidgetIndex(cm, w1);
+                    int i2 = findWidgetIndex(cm, w2);
+                    return Integer.compare(i1, i2);
+                });
+                return;
+            }
+        } catch (ProcessCanceledException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.debug("Failed to sort widgets by tab order: " + e.getMessage());
+        }
+        sortWidgetsByIdentity(widgets);
+    }
+
+    private static void sortWidgetsByIdentity(List<Object> widgets) {
+        widgets.sort(Comparator.comparingInt(System::identityHashCode));
     }
 
     private static int findWidgetIndex(ContentManager cm, Object widget) {
@@ -256,7 +375,7 @@ public class TerminalMonitorService implements ProjectActivity {
                         return i;
                     }
                 } catch (Exception e) {
-                    // ignore
+                    LOG.debug("Failed to match widget title for index lookup", e);
                 }
             }
         }
@@ -265,20 +384,25 @@ public class TerminalMonitorService implements ProjectActivity {
 
     /**
      * Get the captured content of a terminal widget.
-     * First tries dynamic capture from process listener, then supplements with screen scraping.
+     * Selects the more complete data source between dynamic capture (ProcessListener) and screen scrape.
      */
     public static String getWidgetContent(@NotNull Object widget) {
         String captured = getCapturedContent(widget);
-        LOG.debug("[Terminal] Dynamic capture length: " + captured.length());
-
-        // Supplement with screen scrape to ensure we get history
         String scraped = scrapeTerminalScreen(widget);
-        if (!scraped.isEmpty()) {
+
+        if (scraped.length() > captured.length()) {
+            LOG.debug("[Terminal] Using screen scrape (" + scraped.length()
+                    + " chars) over dynamic capture (" + captured.length() + " chars)");
             return scraped;
         }
 
-        LOG.debug("[Terminal] Falling back to dynamic capture (length: " + captured.length() + ")");
-        return captured;
+        if (!captured.isEmpty()) {
+            LOG.debug("[Terminal] Using dynamic capture (" + captured.length() + " chars)");
+            return captured;
+        }
+
+        LOG.debug("[Terminal] Using screen scrape as fallback (" + scraped.length() + " chars)");
+        return scraped;
     }
 
     /**
@@ -286,7 +410,7 @@ public class TerminalMonitorService implements ProjectActivity {
      */
     private static String getCapturedContent(@NotNull Object widget) {
         StringBuilder sb = buffers.get(widget);
-        if (sb == null) return "";
+        if (sb == null) { return ""; }
         synchronized (sb) {
             return sb.toString();
         }
@@ -302,11 +426,11 @@ public class TerminalMonitorService implements ProjectActivity {
 
             // Step 1: Get Terminal object
             Object terminal = getTerminalObject(widget);
-            if (terminal == null) return "";
+            if (terminal == null) { return ""; }
 
             // Step 2: Get TextBuffer
             Object buffer = getTextBuffer(terminal);
-            if (buffer == null) return "";
+            if (buffer == null) { return ""; }
 
             // Step 3: Scrape lines
             return scrapeBufferLines(buffer, 500);
@@ -334,7 +458,7 @@ public class TerminalMonitorService implements ProjectActivity {
 
         // Try via panel
         try {
-            java.lang.reflect.Method getPanelMethod = widget.getClass().getMethod("getTerminalPanel");
+            Method getPanelMethod = widget.getClass().getMethod("getTerminalPanel");
             Object panel = getPanelMethod.invoke(widget);
             if (panel != null) {
                 Object terminal = panel.getClass().getMethod("getTerminal").invoke(panel);
@@ -380,14 +504,14 @@ public class TerminalMonitorService implements ProjectActivity {
     private static String scrapeBufferLines(@NotNull Object buffer, int maxLines) {
         try {
             // Find line count method
-            java.lang.reflect.Method getLineCountMethod = findLineCountMethod(buffer);
+            Method getLineCountMethod = findLineCountMethod(buffer);
             if (getLineCountMethod == null) {
                 LOG.debug("[Terminal] Could not find line count method");
                 return "";
             }
 
             // Find getLine method
-            java.lang.reflect.Method getLineMethod = findGetLineMethod(buffer);
+            Method getLineMethod = findGetLineMethod(buffer);
             if (getLineMethod == null) {
                 LOG.debug("[Terminal] Could not find getLine method");
                 return "";
@@ -419,7 +543,7 @@ public class TerminalMonitorService implements ProjectActivity {
     /**
      * Find method to get line count from buffer.
      */
-    private static java.lang.reflect.Method findLineCountMethod(@NotNull Object buffer) {
+    private static Method findLineCountMethod(@NotNull Object buffer) {
         String[] methodNames = {"getLineCount", "getLinesCount", "getHeight", "getBufferHeight"};
         for (String name : methodNames) {
             try {
@@ -430,7 +554,7 @@ public class TerminalMonitorService implements ProjectActivity {
         }
 
         // Fallback: search all methods
-        for (java.lang.reflect.Method m : buffer.getClass().getMethods()) {
+        for (Method m : buffer.getClass().getMethods()) {
             String name = m.getName().toLowerCase();
             if ((name.contains("linecount") || name.contains("height"))
                     && m.getParameterCount() == 0 && m.getReturnType() == int.class) {
@@ -443,12 +567,12 @@ public class TerminalMonitorService implements ProjectActivity {
     /**
      * Find method to get a line from buffer.
      */
-    private static java.lang.reflect.Method findGetLineMethod(@NotNull Object buffer) {
+    private static Method findGetLineMethod(@NotNull Object buffer) {
         try {
             return buffer.getClass().getMethod("getLine", int.class);
         } catch (NoSuchMethodException e) {
             // Fallback: search methods
-            for (java.lang.reflect.Method m : buffer.getClass().getMethods()) {
+            for (Method m : buffer.getClass().getMethods()) {
                 if (m.getName().toLowerCase().contains("getline")
                         && m.getParameterCount() == 1
                         && m.getParameterTypes()[0] == int.class) {
@@ -462,35 +586,35 @@ public class TerminalMonitorService implements ProjectActivity {
     /**
      * Extract text from a single line object.
      */
-    private static String extractLineText(@NotNull Object buffer, @NotNull java.lang.reflect.Method getLineMethod, int lineIndex) {
+    private static String extractLineText(@NotNull Object buffer, @NotNull Method getLineMethod, int lineIndex) {
         try {
             Object line = getLineMethod.invoke(buffer, lineIndex);
-            if (line == null) return null;
+            if (line == null) { return null; }
 
             // Try common method names
             String[] textMethods = {"getText", "getLineText", "getLine", "getString"};
             for (String methodName : textMethods) {
                 try {
-                    java.lang.reflect.Method m = line.getClass().getMethod(methodName);
+                    Method m = line.getClass().getMethod(methodName);
                     String text = (String) m.invoke(line);
-                    if (text != null) return text;
+                    if (text != null) { return text; }
                 } catch (Exception e) {
                     // continue
                 }
             }
 
             // Fallback: find any String-returning method
-            for (java.lang.reflect.Method m : line.getClass().getMethods()) {
+            for (Method m : line.getClass().getMethods()) {
                 if (m.getReturnType() == String.class
                         && m.getParameterCount() == 0
                         && !m.getName().equals("toString")
                         && !m.getName().equals("getClass")) {
                     String text = (String) m.invoke(line);
-                    if (text != null && !text.isEmpty()) return text;
+                    if (text != null && !text.isEmpty()) { return text; }
                 }
             }
         } catch (Exception e) {
-            // ignore individual line failures
+            LOG.debug("Failed to extract text from line " + lineIndex, e);
         }
         return null;
     }
@@ -511,20 +635,98 @@ public class TerminalMonitorService implements ProjectActivity {
     }
 
     private static List<Object> convertResultToList(Object result) {
-        if (result == null) return java.util.Collections.emptyList();
+        if (result == null) { return Collections.emptyList(); }
         if (result instanceof Object[]) {
-            return java.util.Arrays.asList((Object[]) result);
+            return Arrays.asList((Object[]) result);
         }
-        if (result instanceof java.util.Collection) {
-            return new java.util.ArrayList<>((java.util.Collection<?>) result);
+        if (result instanceof Collection) {
+            return new ArrayList<>((Collection<?>) result);
         }
         if (result instanceof Iterable) {
-            java.util.List<Object> list = new java.util.ArrayList<>();
+            List<Object> list = new ArrayList<>();
             for (Object item : (Iterable<?>) result) {
                 list.add(item);
             }
             return list;
         }
-        return java.util.Collections.emptyList();
+        return Collections.emptyList();
+    }
+
+    private static void logTerminalActionRegistration() {
+        if (!LOG.isDebugEnabled()) {
+            return;
+        }
+        try {
+            ActionManager actionManager = ActionManager.getInstance();
+            AnAction action = actionManager.getAction(SendTerminalSelectionToInputAction.ACTION_ID);
+            LOG.debug("[TerminalSend] action registered=" + (action != null)
+                    + ", class=" + (action == null ? "null" : action.getClass().getName()));
+            logGroupMembership(actionManager, SendTerminalSelectionToInputAction.TERMINAL_OUTPUT_CONTEXT_MENU);
+            logGroupMembership(actionManager, SendTerminalSelectionToInputAction.TERMINAL_PROMPT_CONTEXT_MENU);
+            logGroupMembership(actionManager, SendTerminalSelectionToInputAction.TERMINAL_REWORKED_CONTEXT_MENU);
+            logGroupMembership(actionManager, EDITOR_POPUP_MENU);
+        } catch (Exception e) {
+            LOG.warn("[TerminalSend] Failed to log action registration diagnostics", e);
+        }
+    }
+
+    private static void ensureReworkedTerminalMenuRegistration() {
+        try {
+            ActionManager actionManager = ActionManager.getInstance();
+            boolean added = SendTerminalSelectionToInputAction.registerForReworkedTerminalContextMenu(actionManager);
+            if (added) {
+                LOG.info("[TerminalSend] Registered send action into Terminal.ReworkedTerminalContextMenu at runtime");
+            }
+        } catch (Exception | LinkageError e) {
+            LOG.debug("[TerminalSend] Failed to register reworked terminal context menu action", e);
+        }
+    }
+
+    private static void logGroupMembership(@NotNull ActionManager actionManager, @NotNull String groupId) {
+        AnAction groupAction = actionManager.getAction(groupId);
+        if (!(groupAction instanceof ActionGroup)) {
+            LOG.debug("[TerminalSend] group missing or not ActionGroup: " + groupId);
+            return;
+        }
+
+        List<String> childIds = Arrays.stream(resolveActionGroupChildren((ActionGroup) groupAction))
+                .map(child -> actionManager.getId(child))
+                .collect(Collectors.toList());
+        LOG.debug("[TerminalSend] group=" + groupId
+                + ", containsSendAction=" + childIds.contains(SendTerminalSelectionToInputAction.ACTION_ID)
+                + ", childCount=" + childIds.size()
+                + ", sampleChildren=" + childIds.stream().limit(12).collect(Collectors.toList()));
+    }
+
+    private static AnAction[] resolveActionGroupChildren(@NotNull ActionGroup group) {
+        try {
+            Method getChildren = group.getClass().getMethod("getChildren", AnActionEvent.class);
+            Object children = getChildren.invoke(group, new Object[]{null});
+            return children instanceof AnAction[] ? (AnAction[]) children : new AnAction[0];
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+            LOG.debug("[TerminalSend] Failed to resolve action group children", e);
+            return new AnAction[0];
+        }
+    }
+
+    private static void installLegacySendAction(@NotNull Object widget) {
+        if (!(widget instanceof JBTerminalWidget) || legacyActionInstalledWidgets.contains(widget)) {
+            return;
+        }
+        if (!"org.jetbrains.plugins.terminal.ShellTerminalWidget".equals(widget.getClass().getName())) {
+            return;
+        }
+
+        JBTerminalWidget terminalWidget = (JBTerminalWidget) widget;
+        try {
+            TerminalActionProvider currentNext = terminalWidget.getTerminalPanel().getNextProvider();
+            terminalWidget.getTerminalPanel().setNextProvider(
+                    new LegacyTerminalSendActionProvider(terminalWidget, currentNext)
+            );
+            legacyActionInstalledWidgets.add(widget);
+            LOG.info("[TerminalSend] Installed legacy terminal action provider for " + widget.getClass().getName());
+        } catch (Exception e) {
+            LOG.warn("[TerminalSend] Failed to install legacy terminal action provider", e);
+        }
     }
 }

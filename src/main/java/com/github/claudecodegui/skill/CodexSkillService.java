@@ -1,5 +1,6 @@
 package com.github.claudecodegui.skill;
 
+import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.settings.CodexSettingsManager;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.Gson;
@@ -73,8 +74,8 @@ public class CodexSkillService {
      * Validates a skill name to prevent path traversal via directory names.
      */
     private static boolean isSafeSkillName(String name) {
-        if (name == null || name.isEmpty()) return false;
-        if (name.contains("..") || name.contains("/") || name.contains("\\")) return false;
+        if (name == null || name.isEmpty()) { return false; }
+        if (name.contains("..") || name.contains("/") || name.contains("\\")) { return false; }
         return SAFE_NAME_PATTERN.matcher(name).matches();
     }
 
@@ -83,7 +84,7 @@ public class CodexSkillService {
      * Uses absolute + normalize to handle Windows vs Unix path differences.
      */
     private static String normalizePath(String path) {
-        if (path == null || path.isEmpty()) return path;
+        if (path == null || path.isEmpty()) { return path; }
         return Paths.get(path).toAbsolutePath().normalize().toString();
     }
 
@@ -158,15 +159,17 @@ public class CodexSkillService {
         }
 
         // ~/.codex/skills/ (Codex CLI installed skills)
-        String codexDir = Paths.get(userHome, ".codex", "skills").toString();
-        if (Files.isDirectory(Path.of(codexDir)) && seen.add(normalizePath(codexDir))) {
-            dirs.add(new SkillScanDir(codexDir, "user"));
-        }
+        if (isCodexLocalConfigAuthorized()) {
+            String codexDir = Paths.get(userHome, ".codex", "skills").toString();
+            if (Files.isDirectory(Path.of(codexDir)) && seen.add(normalizePath(codexDir))) {
+                dirs.add(new SkillScanDir(codexDir, "user"));
+            }
 
-        // ~/.codex/skills/.system/ (Codex system-level skills)
-        String systemDir = Paths.get(userHome, ".codex", "skills", ".system").toString();
-        if (Files.isDirectory(Path.of(systemDir)) && seen.add(normalizePath(systemDir))) {
-            dirs.add(new SkillScanDir(systemDir, "user"));
+            // ~/.codex/skills/.system/ (Codex system-level skills)
+            String systemDir = Paths.get(userHome, ".codex", "skills", ".system").toString();
+            if (Files.isDirectory(Path.of(systemDir)) && seen.add(normalizePath(systemDir))) {
+                dirs.add(new SkillScanDir(systemDir, "user"));
+            }
         }
 
         return dirs;
@@ -250,6 +253,9 @@ public class CodexSkillService {
     @SuppressWarnings("unchecked")
     public static Set<String> getDisabledSkillPaths() {
         Set<String> disabled = new HashSet<>();
+        if (!isCodexLocalConfigAuthorized()) {
+            return disabled;
+        }
         try {
             Map<String, Object> config;
             synchronized (CONFIG_TOML_LOCK) {
@@ -349,6 +355,12 @@ public class CodexSkillService {
     @SuppressWarnings("unchecked")
     public static JsonObject toggleSkill(String skillPath, boolean currentEnabled, String cwd) {
         JsonObject result = new JsonObject();
+
+        if (!isCodexLocalConfigAuthorized()) {
+            result.addProperty("success", false);
+            result.addProperty("error", com.github.claudecodegui.i18n.ClaudeCodeGuiBundle.message("error.codexLocalAccessNotAuthorized"));
+            return result;
+        }
 
         if (skillPath == null || skillPath.isEmpty()) {
             result.addProperty("success", false);
@@ -642,19 +654,22 @@ public class CodexSkillService {
      */
     @SuppressWarnings("unchecked")
     private static void cleanupConfigTomlEntry(String skillPath) {
+        if (!isCodexLocalConfigAuthorized()) {
+            return;
+        }
         try {
             // Normalize for consistent cross-platform comparison
             String normalizedSkillPath = normalizePath(skillPath);
             synchronized (CONFIG_TOML_LOCK) {
                 Map<String, Object> config = codexSettingsManager.readConfigToml();
-                if (config == null) return;
+                if (config == null) { return; }
 
                 Object skillsObj = config.get("skills");
-                if (!(skillsObj instanceof Map)) return;
+                if (!(skillsObj instanceof Map)) { return; }
 
                 Map<String, Object> skillsMap = (Map<String, Object>) skillsObj;
                 Object configObj = skillsMap.get("config");
-                if (!(configObj instanceof List)) return;
+                if (!(configObj instanceof List)) { return; }
 
                 List<Map<String, Object>> configList = (List<Map<String, Object>>) configObj;
                 boolean removed = configList.removeIf(e -> {
@@ -712,6 +727,15 @@ public class CodexSkillService {
                 return FileVisitResult.CONTINUE;
             }
         });
+    }
+
+    private static boolean isCodexLocalConfigAuthorized() {
+        try {
+            return new CodemossSettingsService().isCodexLocalConfigAuthorized();
+        } catch (Exception e) {
+            LOG.warn("[CodexSkills] Failed to read Codex local authorization state: " + e.getMessage());
+            return false;
+        }
     }
 
     private static void deleteDirectory(Path dir) throws IOException {
