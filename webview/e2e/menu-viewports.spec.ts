@@ -66,8 +66,24 @@ const LONG_MODEL = {
   description: 'A very long model description that should remain clipped inside the selector row instead of pushing the dropdown outside the visible webview viewport.',
 };
 
-async function installBridgeMocks(page: Page) {
-  await page.addInitScript(({ processSnapshot, claudeProviders, codexProviders, longModel }) => {
+const SEARCH_TARGET_MODEL = {
+  id: 'vendor/large-model-search-target-220',
+  label: 'Large Model Search Target 220',
+  description: 'Model outside the initial render cap that should still be selectable through search.',
+};
+
+const LARGE_MODEL_LIST = Array.from({ length: 240 }, (_, index) => {
+  if (index === 220) return SEARCH_TARGET_MODEL;
+  const padded = String(index).padStart(3, '0');
+  return {
+    id: `vendor/large-model-${padded}`,
+    label: `Large Model ${padded}`,
+    description: `Large model fixture ${padded}`,
+  };
+});
+
+async function installBridgeMocks(page: Page, customModels = [LONG_MODEL]) {
+  await page.addInitScript(({ processSnapshot, claudeProviders, codexProviders, models }) => {
     localStorage.setItem('model-selection-state', JSON.stringify({
       provider: 'claude',
       claudeModel: 'claude-sonnet-4-6',
@@ -77,7 +93,7 @@ async function installBridgeMocks(page: Page) {
       longContextEnabled: true,
       reasoningEffort: 'high',
     }));
-    localStorage.setItem('claude-custom-models', JSON.stringify([longModel]));
+    localStorage.setItem('claude-custom-models', JSON.stringify(models));
     localStorage.setItem('lastSeenChangelogVersion', '0.4.4');
 
     const hideVConsole = () => {
@@ -109,7 +125,7 @@ async function installBridgeMocks(page: Page) {
     processSnapshot: NODE_PROCESS_SNAPSHOT,
     claudeProviders: CLAUDE_PROVIDERS_PAYLOAD,
     codexProviders: CODEX_PROVIDERS_PAYLOAD,
-    longModel: LONG_MODEL,
+    models: customModels,
   });
 }
 
@@ -194,8 +210,11 @@ async function openSelectorMenu(page: Page, button: Locator, label: string) {
   await closeOpenMenus(page);
 }
 
-test.beforeEach(async ({ page }) => {
-  await installBridgeMocks(page);
+test.beforeEach(async ({ page }, testInfo) => {
+  const customModels = testInfo.title.includes('large model selector')
+    ? LARGE_MODEL_LIST
+    : [LONG_MODEL];
+  await installBridgeMocks(page, customModels);
 });
 
 test('footer selector menus render inside the viewport', async ({ page }) => {
@@ -282,6 +301,34 @@ test('long model and mode text stays contained in selector menus', async ({ page
   await expect(longModelDescription).toBeVisible();
   await expectContainedWithin(longModelOption, longModelLabel, 'long model label');
   await expectContainedWithin(longModelOption, longModelDescription, 'long model description');
+
+  expect(significantErrors(errors)).toEqual([]);
+});
+
+test('large model selector remains searchable and capped', async ({ page }) => {
+  const errors = collectPageErrors(page);
+  await page.goto('/');
+  await expect(page.locator('.button-area-left')).toBeVisible();
+
+  const modelButton = page.locator('.button-area-left .selector-button').nth(3);
+  await modelButton.click();
+  const modelDropdown = page.locator('.selector-dropdown').first();
+  await expect(modelDropdown).toBeVisible();
+  await expectInsideViewport(page, modelDropdown, 'large model dropdown');
+
+  const renderedLargeModels = modelDropdown.getByText(/^Large Model \d{3}$/);
+  await expect(renderedLargeModels).toHaveCount(100);
+  await expect(modelDropdown.getByText(/^\+ \d+ more models\. Type to search\.$/)).toBeVisible();
+  await expect(modelDropdown.getByText(SEARCH_TARGET_MODEL.label)).toHaveCount(0);
+
+  const searchInput = modelDropdown.getByPlaceholder('Search models');
+  await expect(searchInput).toBeVisible();
+  await searchInput.fill('Search Target 220');
+
+  const targetOption = modelDropdown.locator('.selector-option').filter({ hasText: SEARCH_TARGET_MODEL.label }).first();
+  await expect(targetOption).toBeVisible();
+  await targetOption.click();
+  await expect(modelButton).toHaveAttribute('title', new RegExp(SEARCH_TARGET_MODEL.label));
 
   expect(significantErrors(errors)).toEqual([]);
 });
