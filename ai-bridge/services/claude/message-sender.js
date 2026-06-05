@@ -30,8 +30,9 @@ import {
 import { createPreToolUseHook } from './permission-mode.js';
 import { loadMcpServersConfigAsRecord } from './mcp-status/config-loader.js';
 import { setActiveQueryResult } from './message-session-registry.js';
-import { normalizeStreamDelta, rememberStreamSnapshot } from './stream-delta-normalizer.js';
+import { normalizeStreamDelta, resolveSnapshotDelta, resetTurnBlockState } from './stream-delta-normalizer.js';
 import { generateSessionTitle } from '../session-title-service.js';
+import { getClaudeCliPathOverride } from '../../utils/claude-cli-path.js';
 
 // ========== Internal helpers for deduplication ==========
 
@@ -62,6 +63,7 @@ function resolveThinkingConfig(settings) {
  * Build query options object shared by both send functions.
  */
 function buildQueryOptions({ workingDirectory, permissionMode, sdkModelName, maxThinkingTokens, streamingEnabled, systemPromptAppend, preToolUseHook, sdkStderrLines, mcpServers }) {
+  const claudeCliOverride = getClaudeCliPathOverride();
   return {
     cwd: workingDirectory,
     permissionMode,
@@ -78,6 +80,7 @@ function buildQueryOptions({ workingDirectory, permissionMode, sdkModelName, max
     hooks: { PreToolUse: [{ hooks: [preToolUseHook] }] },
     settingSources: ['user', 'project', 'local'],
     ...(mcpServers && { mcpServers }),
+    ...(claudeCliOverride && { pathToClaudeCodeExecutable: claudeCliOverride }),
     systemPrompt: {
       type: 'preset',
       preset: 'claude_code',
@@ -152,10 +155,21 @@ function processStreamMessage(msg, state, logPrefix) {
       // - message_start: ACCUMULATE usage across all turns (not reset!)
       // - message_delta: incremental output_tokens updates
       // - The accumulatedUsage represents the cumulative total across all turns in multi-turn tool use.
-      if (event.type === 'message_start' && event.message?.usage) {
-        // IMPORTANT: Must use mergeUsage(state.accumulatedUsage, ...) to accumulate across turns.
-        // Using mergeUsage(null, ...) would reset and only show the last turn's usage.
-        state.accumulatedUsage = mergeUsage(state.accumulatedUsage, event.message.usage);
+      if (event.type === 'message_start') {
+        // Turn boundary: re-numbered content blocks. Clear the index-keyed block
+        // maps so the prior turn's accumulator / locked stream-mode cannot corrupt
+        // or duplicate this turn's index-0 block (see resetTurnBlockState). Mirrors
+        // stream-event-processor.js — both streaming paths must reset identically.
+        resetTurnBlockState(state);
+        // Emit BLOCK_RESET — mirrors stream-event-processor.js, see there for rationale.
+        if (state.streamingEnabled) {
+          process.stdout.write('[BLOCK_RESET]\n');
+        }
+        if (event.message?.usage) {
+          // IMPORTANT: Must use mergeUsage(state.accumulatedUsage, ...) to accumulate across turns.
+          // Using mergeUsage(null, ...) would reset and only show the last turn's usage.
+          state.accumulatedUsage = mergeUsage(state.accumulatedUsage, event.message.usage);
+        }
       }
       if (event.type === 'message_delta' && event.usage) {
         state.accumulatedUsage = mergeUsage(state.accumulatedUsage, event.usage);
@@ -245,30 +259,33 @@ function processStreamMessage(msg, state, logPrefix) {
 
 /** Emit text content delta with streaming fallback support. */
 function emitTextDelta(currentText, state, blockIndex = 0) {
-  rememberStreamSnapshot(state, 'text', blockIndex, currentText);
-  if (state.streamingEnabled && !state.hasStreamEvents && currentText.length > state.lastAssistantContent.length) {
-    const delta = currentText.substring(state.lastAssistantContent.length);
-    if (delta) process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
-    state.lastAssistantContent = currentText;
-  } else if (state.streamingEnabled && state.hasStreamEvents) {
-    if (currentText.length > state.lastAssistantContent.length) state.lastAssistantContent = currentText;
-  } else if (!state.streamingEnabled) {
+  if (!state.streamingEnabled) {
     console.log('[CONTENT]', truncateErrorContent(currentText));
+    return;
   }
+  // Single-source the delta through the normalizer (see resolveSnapshotDelta).
+  // Emit gate (unchanged from the tail-fill fix):
+  //   - !hasStreamEvents: pre-stream fallback, emit the whole computed delta
+  //   - hasStreamEvents && hadPrevious: genuine tail-fill / snapshot correction
+  //   - hasStreamEvents && !hadPrevious: stream will deliver this block, suppress
+  const { delta, hadPrevious } = resolveSnapshotDelta(state, 'text', blockIndex, currentText);
+  if (delta && (!state.hasStreamEvents || hadPrevious)) {
+    process.stdout.write(`[CONTENT_DELTA] ${JSON.stringify(delta)}\n`);
+  }
+  state.lastAssistantContent = currentText;
 }
 
 /** Emit thinking content delta with streaming fallback support. */
 function emitThinkingDelta(thinkingText, state, blockIndex = 0) {
-  rememberStreamSnapshot(state, 'thinking', blockIndex, thinkingText);
-  if (state.streamingEnabled && !state.hasStreamEvents && thinkingText.length > state.lastThinkingContent.length) {
-    const delta = thinkingText.substring(state.lastThinkingContent.length);
-    if (delta) process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
-    state.lastThinkingContent = thinkingText;
-  } else if (state.streamingEnabled && state.hasStreamEvents) {
-    if (thinkingText.length > state.lastThinkingContent.length) state.lastThinkingContent = thinkingText;
-  } else if (!state.streamingEnabled) {
+  if (!state.streamingEnabled) {
     console.log('[THINKING]', thinkingText);
+    return;
   }
+  const { delta, hadPrevious } = resolveSnapshotDelta(state, 'thinking', blockIndex, thinkingText);
+  if (delta && (!state.hasStreamEvents || hadPrevious)) {
+    process.stdout.write(`[THINKING_DELTA] ${JSON.stringify(delta)}\n`);
+  }
+  state.lastThinkingContent = thinkingText;
 }
 
 /**

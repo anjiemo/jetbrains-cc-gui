@@ -12,6 +12,7 @@
     "close": "Cerrar",
     "newSession": "Nueva sesión",
     "newTab": "Nueva pestaña",
+    "dontAskAgain": "No volver a preguntar",
     "history": "Historial",
     "settings": "Configuración",
     "thinking": "Pensando",
@@ -90,6 +91,22 @@
     "streamingConnected": "{{provider}} conectado, entendiendo tu pregunta",
     "showEarlierMessages": "Mostrar {{count}} mensajes anteriores",
     "totalDuration": "Esta respuesta tardó",
+    "search": {
+      "ariaLabel": "Buscar en la conversación",
+      "placeholder": "Buscar en la conversación…",
+      "next": "Siguiente coincidencia (Enter)",
+      "previous": "Coincidencia anterior (Mayús+Enter)",
+      "close": "Cerrar (Esc)",
+      "counter": "{{current}}/{{total}}",
+      "noResults": "Sin resultados",
+      "searching": "Buscando…",
+      "expandedHint": "{{count}} mensajes anteriores expandidos",
+      "matchCase": "Coincidir mayúsculas y minúsculas (Alt+C)",
+      "wholeWord": "Coincidir palabra completa (Alt+W)",
+      "regex": "Expresión regular (Alt+R)",
+      "invalidRegex": "Regex no válida",
+      "openTooltip": "Buscar en la conversación (Cmd/Ctrl+F)"
+    },
     "compactSummary": {
       "summarizedConversation": "Conversación resumida",
       "compactSummary": "Resumen compacto",
@@ -141,6 +158,11 @@
         "hintText": "para obtener la ruta del ejecutable real de Node.js. Dejar vacío para detección automática.",
         "versionTooLow": "La versión de Node.js es demasiado baja. El plugin requiere v{{minVersion}} o superior para funcionar correctamente"
       },
+      "claudeCliPath": {
+        "label": "Ruta del CLI de Claude (anulación)",
+        "placeholder": "p. ej. /usr/local/bin/claude — déjalo vacío para usar el SDK integrado",
+        "hint": "Opcional. Cuando se establece, el complemento ejecuta este binario en lugar del @anthropic-ai/claude-agent-sdk integrado. El daemon se reinicia al guardar."
+      },
       "workingDirectory": {
         "label": "Working Directory",
         "placeholder": "e.g. project1 or leave empty to use project root",
@@ -156,16 +178,28 @@
         "level6": "Máximo (140%)"
       },
       "editorFont": {
-        "label": "Fuente",
-        "hint": "Aquí cambias la fuente de la interfaz del plugin; el tamaño y el interlineado siguen al editor.",
-        "followOption": "Seguir al editor ({{font}})",
-        "customOption": "Archivo de fuente personalizado",
-        "customPathLabel": "Ruta del archivo de fuente",
-        "customPathPlaceholder": "Elige o escribe la ruta de un archivo .ttf / .otf",
+        "label": "Fuente UI",
+        "hint": "Aquí cambias la fuente de la interfaz del plugin; el código puede usar una fuente aparte.",
+        "followOption": "Seguir la fuente UI de IDEA ({{font}})",
+        "customOption": "Archivo de fuente UI personalizado",
+        "customPathLabel": "Ruta del archivo de fuente UI",
+        "customPathPlaceholder": "Elige o escribe la ruta de un archivo .ttf / .otf para la fuente UI",
         "browse": "Examinar",
-        "warningUnavailable": "La fuente no está disponible; se usa la fuente del editor",
+        "warningUnavailable": "La fuente UI no está disponible; se usa la fuente UI de IDEA",
+        "statusFollowEditor": "Actualmente se usa la fuente UI de IDEA: {{font}}",
+        "statusCustom": "Actualmente se usa la fuente UI personalizada: {{font}}"
+      },
+      "codeFont": {
+        "label": "Fuente de código",
+        "hint": "El código Markdown y los bloques de comando usan esta fuente.",
+        "followOption": "Seguir la fuente del editor ({{font}})",
+        "customOption": "Archivo de fuente de código personalizado",
+        "customPathLabel": "Ruta del archivo de fuente de código",
+        "customPathPlaceholder": "Elige o escribe la ruta de un archivo .ttf / .otf para la fuente de código",
+        "browse": "Examinar",
+        "warningUnavailable": "La fuente de código no está disponible; se usa la fuente del editor",
         "statusFollowEditor": "Actualmente se usa la fuente del editor: {{font}}",
-        "statusCustom": "Actualmente se usa la fuente personalizada: {{font}}"
+        "statusCustom": "Actualmente se usa la fuente de código personalizada: {{font}}"
       },
       "streaming": {
         "label": "Streaming",
@@ -228,6 +262,12 @@
         "custom": "Personalizado",
         "reset": "Restablecer",
         "hint": "Personalizar el color de fondo de sus mensajes. Dejar vacío para seguir el tema predeterminado."
+      },
+      "newSessionConfirm": {
+        "label": "Confirmación de nueva sesión",
+        "enabled": "Habilitado",
+        "disabled": "Deshabilitado",
+        "hint": "Cuando está deshabilitado, crear una nueva sesión en una conversación con mensajes existentes omitirá el cuadro de confirmación."
       }
     },
     "providers": "Gestión de proveedores",
@@ -802,6 +842,44 @@
       "empty": "No hay proveedores disponibles",
       "switched": "Cambiado a {{provider}}"
     },
+    "nodeProcesses": {
+      "title": "Gestor de procesos Node",
+      "badge": "{{total}} procesos",
+      "badgeWithOrphan": "{{total}} · {{orphan}} huérfanos ⚠",
+      "summary": "Total: {{total}} · Huérfanos: {{orphan}}",
+      "loading": "Cargando procesos...",
+      "empty": "No hay procesos Node activos",
+      "refresh": "Actualizar",
+      "groups": {
+        "daemon": "Procesos daemon",
+        "channel": "Conversaciones activas",
+        "orphan": "Procesos huérfanos"
+      },
+      "kind": {
+        "daemonShort": "Daemon",
+        "channelShort": "Canal",
+        "orphanShort": "Huérfano"
+      },
+      "kill": "Terminar",
+      "interrupt": "Detener",
+      "restart": "Reiniciar",
+      "pending": "Procesando...",
+      "killAll": "Limpiar huérfanos ({{count}})",
+      "killHint": "Forzar la terminación de este proceso Node",
+      "killAllHint": "Terminar todos los procesos huérfanos detectados",
+      "restartHint": "Detiene el daemon; el siguiente mensaje generará uno nuevo automáticamente",
+      "killConfirmTitle": "¿Terminar este proceso?",
+      "killConfirm": "¿Terminar el proceso PID {{pid}}? Las conversaciones en curso pueden perderse.",
+      "restartConfirmTitle": "¿Reiniciar el daemon?",
+      "restartConfirm": "¿Reiniciar el daemon? Las conversaciones activas se interrumpirán.",
+      "killAllConfirmTitle": "¿Limpiar todos los procesos huérfanos?",
+      "killAllConfirm": "¿Terminar los {{count}} procesos huérfanos?",
+      "killSuccess": "Proceso terminado",
+      "killAllSuccess": "Se limpiaron {{count}} procesos huérfanos",
+      "restartSuccess": "Daemon detenido; se iniciará automáticamente en el siguiente mensaje",
+      "killFailed": "Error al terminar: {{error}}",
+      "activeRequests": "{{count}} en curso"
+    },
     "link": "Enlace"
   },
   "markdown": {
@@ -1230,7 +1308,7 @@
       },
       "opus46": {
         "label": "Opus 4.7",
-        "description": "Opus 4.7 · El más reciente y capaz"
+        "description": "Opus 4.7 · Modelo insignia anterior"
       },
       "opus46_1m": {
         "label": "Opus 4.6",
@@ -1239,6 +1317,10 @@
       "haiku45": {
         "label": "Haiku 4.5",
         "description": "Haiku 4.5 · El más rápido para respuestas rápidas"
+      },
+      "opus48": {
+        "label": "Opus 4.8",
+        "description": "Opus 4.8 · El más reciente y capaz"
       }
     },
     "longContext": {
@@ -1488,6 +1570,22 @@
         "downgrade": {
           "title": "Opción 2: Volver a una versión anterior",
           "step0": "En Gestión de dependencias, cambia la versión del SDK a v0.2.112 o anterior. Reinicia IDEA después del cambio."
+        }
+      }
+    },
+    "spawnEbusy": {
+      "title": "spawn EBUSY — error al iniciar el proceso hijo",
+      "intro": "Este error suele estar causado por una versión incompatible de Node.js o una instalación incompleta del SDK. Prueba las dos opciones siguientes en orden:",
+      "reason": "EBUSY es un error del sistema generado por Node.js cuando no puede iniciarse un proceso hijo debido a un recurso ocupado. Causas comunes: problemas de compatibilidad con Node.js 24, un SDK desactualizado, o una instalación incompleta desde el mirror de Taobao.",
+      "solutions": {
+        "checkNodeVersion": {
+          "title": "Opción 1: Verifica tu versión de Node.js",
+          "step0": "Ejecuta el comando siguiente en una terminal para ver tu versión. Se recomienda Node 22 o la LTS actual — los usuarios han reportado muchos problemas con Node 24, prefiere Node 20 o 22:"
+        },
+        "reinstallLatestSdk": {
+          "title": "Opción 2: Reinstalar el último SDK desde el registro oficial de npm",
+          "step0": "1. Cambia al registro oficial de npm (evita el mirror de Taobao — puede no tener la última versión):",
+          "step1": "2. Abre Gestión de dependencias y reinstala el último SDK:"
         }
       }
     }

@@ -176,6 +176,11 @@ interface Window {
   insertCodeSnippetAtCursor?: (selectionInfo: string) => void;
 
   /**
+   * Focus the chat input box - registered by ChatInputBox
+   */
+  focusChatInput?: () => void;
+
+  /**
    * Clear selection info
    */
   clearSelectionInfo?: () => void;
@@ -325,6 +330,11 @@ interface Window {
   updateNodePath?: (path: string) => void;
 
   /**
+   * Update custom Claude CLI path
+   */
+  updateClaudeCliPath?: (path: string) => void;
+
+  /**
    * Update working directory configuration
    */
   updateWorkingDirectory?: (json: string) => void;
@@ -431,9 +441,19 @@ interface Window {
   applyUiFontConfig?: (config: import('./types/uiFontConfig').UiFontConfig | string) => void;
 
   /**
+   * Apply effective plugin code font configuration (called from Java backend)
+   */
+  applyCodeFontConfig?: (config: import('./types/uiFontConfig').CodeFontConfig | string) => void;
+
+  /**
    * Pending effective UI font config before applyUiFontConfig is registered
    */
   __pendingUiFontConfig?: import('./types/uiFontConfig').UiFontConfig;
+
+  /**
+   * Pending effective code font config before applyCodeFontConfig is registered
+   */
+  __pendingCodeFontConfig?: import('./types/uiFontConfig').CodeFontConfig;
 
   /**
    * Apply IDEA language configuration (called from Java backend)
@@ -485,6 +505,11 @@ interface Window {
    * Effective UI font config received callback
    */
   onUiFontConfigReceived?: (json: string) => void;
+
+  /**
+   * Effective code font config received callback
+   */
+  onCodeFontConfigReceived?: (json: string) => void;
 
   /**
    * IDE theme received callback - receives IDE theme configuration
@@ -572,6 +597,18 @@ interface Window {
   updateActiveCodexProvider?: (json: string) => void;
 
   /**
+   * Update Node process management snapshot.
+   * Payload: { snapshotAt, totals: { daemon, channel, orphan, all }, processes: NodeProcessInfo[] }
+   */
+  updateNodeProcesses?: (json: string) => void;
+
+  /**
+   * Result of a kill_node_process / kill_all_orphans / restart_node_daemon call.
+   * Payload: { pid?, success?, killed?, restart?, error? }
+   */
+  nodeProcessKillResult?: (json: string) => void;
+
+  /**
    * Update current Codex config (from ~/.codex/)
    */
   updateCurrentCodexConfig?: (json: string) => void;
@@ -583,7 +620,7 @@ interface Window {
   /**
    * Stream start callback - called when streaming begins
    */
-  onStreamStart?: () => void;
+  onStreamStart?: (mode?: string | boolean) => void;
 
   /**
    * Content delta callback - called when a content delta is received
@@ -596,6 +633,13 @@ interface Window {
    * @param delta The thinking delta string
    */
   onThinkingDelta?: (delta: string) => void;
+
+  /**
+   * Block reset callback - called when a new assistant message starts within
+   * an ongoing stream (e.g., after a tool_use loop iteration). Frontend should
+   * clear streaming content refs to prevent cross-turn content merging.
+   */
+  onBlockReset?: () => void;
 
   /**
    * Stream end callback - called when streaming ends
