@@ -97,12 +97,11 @@ public class NodeDetectorWslTest {
 
     @Test
     public void buildNodeScriptCommand_nonWslPath_returnsNodeAndScript() {
-        List<String> cmd = NodeDetector.buildNodeScriptCommand(
-                "/usr/local/bin/node", "/path/to/script.js");
+        List<String> cmd = NodeDetector.buildNodeScriptCommand("node", "script.js");
         assertNotNull(cmd);
         assertEquals(2, cmd.size());
-        assertEquals("/usr/local/bin/node", cmd.get(0));
-        assertEquals("/path/to/script.js", cmd.get(1));
+        assertEquals("node", cmd.get(0));
+        assertEquals("script.js", cmd.get(1));
     }
 
     @Test
@@ -128,11 +127,10 @@ public class NodeDetectorWslTest {
 
     @Test
     public void buildNodeInlineCommand_nonWslPath_returnsNodeEvalScript() {
-        List<String> cmd = NodeDetector.buildNodeInlineCommand(
-                "/usr/local/bin/node", "console.log('hi');");
+        List<String> cmd = NodeDetector.buildNodeInlineCommand("node", "console.log('hi');");
         assertNotNull(cmd);
         assertEquals(3, cmd.size());
-        assertEquals("/usr/local/bin/node", cmd.get(0));
+        assertEquals("node", cmd.get(0));
         assertEquals("-e", cmd.get(1));
         assertEquals("console.log('hi');", cmd.get(2));
     }
