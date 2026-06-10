@@ -1,30 +1,24 @@
-import {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import type {TFunction} from 'i18next';
-import type {ClaudeContentBlock, ClaudeMessage, ToolResultBlock} from '../../types';
+import { useState, useCallback, useMemo, memo, useEffect, useRef } from 'react';
+import type { TFunction } from 'i18next';
+import type { ClaudeMessage, ClaudeContentBlock, ToolResultBlock } from '../../types';
 
 import MarkdownBlock from '../MarkdownBlock';
-import {isProviderNotConfiguredError, ProviderNotConfiguredCard} from './ProviderNotConfiguredCard';
-import {ErrorDiagnosticCard} from './ErrorDiagnosticCard';
-import {matchErrorPattern} from '../../utils/errorMatcher';
+import { ProviderNotConfiguredCard, isProviderNotConfiguredError } from './ProviderNotConfiguredCard';
+import { ErrorDiagnosticCard } from './ErrorDiagnosticCard';
+import { matchErrorPattern } from '../../utils/errorMatcher';
 import {
-  BashToolBlock,
-  BashToolGroupBlock,
   EditToolBlock,
   EditToolGroupBlock,
   ReadToolBlock,
   ReadToolGroupBlock,
+  BashToolBlock,
+  BashToolGroupBlock,
   SearchToolGroupBlock,
 } from '../toolBlocks';
-import {ContentBlockRenderer} from './ContentBlockRenderer';
-import {formatTime} from '../../utils/helpers';
-import {copyToClipboard} from '../../utils/copyUtils';
-import {
-  BASH_TOOL_NAMES,
-  EDIT_TOOL_NAMES,
-  isToolName,
-  READ_TOOL_NAMES,
-  SEARCH_TOOL_NAMES
-} from '../../utils/toolConstants';
+import { ContentBlockRenderer } from './ContentBlockRenderer';
+import { formatTime } from '../../utils/helpers';
+import { copyToClipboard } from '../../utils/copyUtils';
+import { READ_TOOL_NAMES, EDIT_TOOL_NAMES, BASH_TOOL_NAMES, SEARCH_TOOL_NAMES, isToolName } from '../../utils/toolConstants';
 
 export interface MessageItemProps {
   message: ClaudeMessage;
@@ -110,34 +104,47 @@ function formatDurationMs(durationMs: number): string {
 }
 
 interface TokenUsageInfo {
+  /** Total input-side tokens for the turn (non-cache input + cache write + cache read). */
   inputTokens: number;
   outputTokens: number;
+  nonCacheInputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
 }
 
 /**
- * Extract per-message billed token usage from a message's raw JSON.
- * Tries `raw.message.usage` (Claude) then `raw.usage` (Codex).
- * Returns null when no meaningful usage data is found.
+ * Extract whole-turn token usage from a message's raw JSON.
  *
- * These are the actual `input_tokens` and `output_tokens` reported by the
- * API provider — the tokens that are billed (cache tokens are separate).
+ * Reads the `turnUsage` field stamped by the backend when a turn completes
+ * (ClaudeMessageHandler.handleResult / CodexMessageHandler.handleResultMessage).
+ * It aggregates every API call in the turn, normalized to the Claude usage
+ * schema (input_tokens excludes cache; cache fields are separate).
+ *
+ * Do NOT read `raw.message.usage` or `raw.usage` here: those carry per-API-call
+ * and session-cumulative values that feed the context-usage status bar, and
+ * would understate (Claude) or overstate (Codex) what this turn consumed.
+ *
+ * Returns null when no turn usage is available (aborted turns, history replay).
  */
 function extractTokenUsage(raw: ClaudeMessage['raw']): TokenUsageInfo | null {
   if (!raw || typeof raw !== 'object') return null;
-  const msgObj = raw as Record<string, unknown>;
-  const message = typeof msgObj.message === 'object' && msgObj.message !== null
-      ? msgObj.message as Record<string, unknown>
-      : null;
-  const usageSrc = (message && typeof message.usage === 'object' && message.usage !== null)
-      ? message.usage as Record<string, unknown>
-      : typeof msgObj.usage === 'object' && msgObj.usage !== null
-          ? msgObj.usage as Record<string, unknown>
-          : null;
-  if (!usageSrc) return null;
-  const input = typeof usageSrc.input_tokens === 'number' ? usageSrc.input_tokens : 0;
-  const output = typeof usageSrc.output_tokens === 'number' ? usageSrc.output_tokens : 0;
+  const usageSrc = (raw as Record<string, unknown>).turnUsage;
+  if (!usageSrc || typeof usageSrc !== 'object') return null;
+  const usage = usageSrc as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+  const nonCacheInput = num(usage.input_tokens);
+  const cacheCreation = num(usage.cache_creation_input_tokens);
+  const cacheRead = num(usage.cache_read_input_tokens);
+  const output = num(usage.output_tokens);
+  const input = nonCacheInput + cacheCreation + cacheRead;
   if (input === 0 && output === 0) return null;
-  return {inputTokens: input, outputTokens: output};
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    nonCacheInputTokens: nonCacheInput,
+    cacheCreationTokens: cacheCreation,
+    cacheReadTokens: cacheRead,
+  };
 }
 
 /** Format a token count for compact display (e.g., 1234 → "1.2K"). */
@@ -668,15 +675,23 @@ export const MessageItem = memo(function MessageItem({
               const tokenInfo = extractTokenUsage(message.raw);
               if (!tokenInfo) return null;
               return (
-                  <>
-                    <span className="message-duration-separator">·</span>
-                    <span className="message-duration-tokens">
+                <>
+                  <span className="message-duration-separator">·</span>
+                  <span
+                    className="message-duration-tokens"
+                    title={t('chat.tokenUsageDetail', {
+                      input: formatTokenCount(tokenInfo.nonCacheInputTokens),
+                      cacheWrite: formatTokenCount(tokenInfo.cacheCreationTokens),
+                      cacheRead: formatTokenCount(tokenInfo.cacheReadTokens),
+                      output: formatTokenCount(tokenInfo.outputTokens),
+                    })}
+                  >
                     {t('chat.tokenUsage', {
                       input: formatTokenCount(tokenInfo.inputTokens),
                       output: formatTokenCount(tokenInfo.outputTokens),
                     })}
                   </span>
-                  </>
+                </>
               );
             })()}
           </span>

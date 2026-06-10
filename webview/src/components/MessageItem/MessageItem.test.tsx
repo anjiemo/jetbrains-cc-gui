@@ -1,8 +1,8 @@
-import {render, screen} from '@testing-library/react';
-import {describe, expect, it, vi} from 'vitest';
-import type {ClaudeContentBlock, ClaudeMessage, ToolResultBlock} from '../../types';
-import {extractMarkdownContent} from '../../utils/copyUtils';
-import {MessageItem} from './MessageItem';
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import type { ClaudeContentBlock, ClaudeMessage, ToolResultBlock } from '../../types';
+import { extractMarkdownContent } from '../../utils/copyUtils';
+import { MessageItem } from './MessageItem';
 
 vi.mock('../MarkdownBlock', () => ({
   default: ({ content }: { content: string }) => <div data-testid="markdown-block">{content}</div>,
@@ -36,6 +36,7 @@ const t = ((key: string, opts?: Record<string, string>) => {
     'chat.streamingConnected': '已连接',
     'chat.totalDuration': '本次耗时',
     'chat.tokenUsage': '输入 {{input}} / 输出 {{output}}',
+    'chat.tokenUsageDetail': '本轮合计 — 输入 {{input}} · 缓存写入 {{cacheWrite}} · 缓存读取 {{cacheRead}} · 输出 {{output}}',
   };
   let result = translations[key] ?? key;
   if (opts) {
@@ -162,18 +163,18 @@ describe('MessageItem copy button visibility', () => {
 });
 
 describe('MessageItem token usage display', () => {
-  it('shows token usage alongside duration when usage data is present', () => {
+  it('shows whole-turn token usage alongside duration when turnUsage is present', () => {
     const message: ClaudeMessage = {
       type: 'assistant',
       content: 'Hello',
       durationMs: 16000,
       raw: {
         message: {
-          content: [{type: 'text', text: 'Hello'}],
-          usage: {
-            input_tokens: 1200,
-            output_tokens: 456,
-          },
+          content: [{ type: 'text', text: 'Hello' }],
+        },
+        turnUsage: {
+          input_tokens: 1200,
+          output_tokens: 456,
         },
       } as any,
     };
@@ -184,18 +185,53 @@ describe('MessageItem token usage display', () => {
     expect(screen.getByText('输入 1.2K / 输出 456')).toBeTruthy();
   });
 
-  it('shows only billed input/output tokens, ignoring cache', () => {
+  it('counts cache tokens in the input total and details them in the tooltip', () => {
     const message: ClaudeMessage = {
       type: 'assistant',
       content: 'Hello',
       durationMs: 10000,
       raw: {
         message: {
-          content: [{type: 'text', text: 'Hello'}],
+          content: [{ type: 'text', text: 'Hello' }],
+        },
+        turnUsage: {
+          input_tokens: 37,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 36310,
+          output_tokens: 353,
+        },
+      } as any,
+    };
+
+    renderMessageItem(message);
+
+    // Input shows the full input side (37 + 0 + 36310 = 36347 → "36.3K"),
+    // so heavy cache reads are never hidden from the user.
+    const tokens = screen.getByText('输入 36.3K / 输出 353');
+    expect(tokens).toBeTruthy();
+    expect(tokens.getAttribute('title')).toBe(
+      '本轮合计 — 输入 37 · 缓存写入 0 · 缓存读取 36.3K · 输出 353'
+    );
+  });
+
+  it('ignores per-call usage fields (message.usage / top-level usage)', () => {
+    // Regression guard: message.usage is the per-call context-occupancy value
+    // for the status bar and top-level usage is the session-cumulative Codex
+    // value — rendering either would misstate what the turn consumed.
+    const message: ClaudeMessage = {
+      type: 'assistant',
+      content: 'Hello',
+      durationMs: 5000,
+      raw: {
+        content: [{ type: 'text', text: 'Hello' }],
+        usage: {
+          input_tokens: 500000,
+          output_tokens: 9000,
+        },
+        message: {
+          content: [{ type: 'text', text: 'Hello' }],
           usage: {
             input_tokens: 37,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 36310,
             output_tokens: 353,
           },
         },
@@ -204,38 +240,18 @@ describe('MessageItem token usage display', () => {
 
     renderMessageItem(message);
 
-    // Only shows input_tokens (37) and output_tokens (353), not cache
-    expect(screen.getByText('输入 37 / 输出 353')).toBeTruthy();
-  });
-
-  it('shows token usage from top-level usage (Codex path)', () => {
-    const message: ClaudeMessage = {
-      type: 'assistant',
-      content: 'Hello',
-      durationMs: 5000,
-      raw: {
-        content: [{type: 'text', text: 'Hello'}],
-        usage: {
-          input_tokens: 500,
-          output_tokens: 200,
-        },
-      } as any,
-    };
-
-    renderMessageItem(message);
-
     expect(screen.getByText('0:05')).toBeTruthy();
-    expect(screen.getByText('输入 500 / 输出 200')).toBeTruthy();
+    expect(screen.queryByText(/输入/)).toBeNull();
   });
 
-  it('does not show token usage when no usage data is present', () => {
+  it('does not show token usage when no turnUsage is present', () => {
     const message: ClaudeMessage = {
       type: 'assistant',
       content: 'Hello',
       durationMs: 3000,
       raw: {
         message: {
-          content: [{type: 'text', text: 'Hello'}],
+          content: [{ type: 'text', text: 'Hello' }],
         },
       } as any,
     };
@@ -243,7 +259,7 @@ describe('MessageItem token usage display', () => {
     renderMessageItem(message);
 
     expect(screen.getByText('0:03')).toBeTruthy();
-    expect(screen.queryByText(/总/)).toBeNull();
+    expect(screen.queryByText(/输入/)).toBeNull();
   });
 
   it('does not show token usage when tokens are all zero', () => {
@@ -253,11 +269,11 @@ describe('MessageItem token usage display', () => {
       durationMs: 3000,
       raw: {
         message: {
-          content: [{type: 'text', text: 'Hello'}],
-          usage: {
-            input_tokens: 0,
-            output_tokens: 0,
-          },
+          content: [{ type: 'text', text: 'Hello' }],
+        },
+        turnUsage: {
+          input_tokens: 0,
+          output_tokens: 0,
         },
       } as any,
     };
@@ -265,6 +281,6 @@ describe('MessageItem token usage display', () => {
     renderMessageItem(message);
 
     expect(screen.getByText('0:03')).toBeTruthy();
-    expect(screen.queryByText(/总/)).toBeNull();
+    expect(screen.queryByText(/输入/)).toBeNull();
   });
 });

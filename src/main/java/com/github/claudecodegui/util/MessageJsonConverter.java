@@ -199,8 +199,12 @@ public class MessageJsonConverter {
         copyFieldIfPresent(raw, transport, "summarizeMetadata");
         // Origin field for distinguishing human input from synthetic messages
         copyFieldIfPresent(raw, transport, "origin");
-        // Usage field for per-message token display (Codex path: top-level usage)
-        copyFieldIfPresent(raw, transport, "usage");
+        // Whole-turn aggregated usage stamped by ClaudeMessageHandler.handleResult /
+        // CodexMessageHandler.handleResultMessage, for the per-turn token display.
+        // Deliberately NOT copying the top-level usage or message.usage fields:
+        // those carry per-call / session-cumulative values for the status bar and
+        // would be misleading if rendered per message.
+        copyFieldIfPresent(raw, transport, "turnUsage");
 
         if (raw.has("content")) {
             transport.add("content", raw.get("content").deepCopy());
@@ -212,8 +216,6 @@ public class MessageJsonConverter {
             if (sourceMessage.has("content")) {
                 transportMessage.add("content", sourceMessage.get("content").deepCopy());
             }
-            // Usage inside message object (Claude path: raw.message.usage)
-            copyFieldIfPresent(sourceMessage, transportMessage, "usage");
             if (transportMessage.size() > 0) {
                 transport.add("message", transportMessage);
             }
