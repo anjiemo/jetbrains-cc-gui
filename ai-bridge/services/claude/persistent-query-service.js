@@ -3,7 +3,13 @@
  * Keeps Claude Query processes alive across turns to reduce per-request latency.
  */
 
-import { isCustomBaseUrl, loadClaudeSettings, setupApiKey, buildCliEnv } from '../../config/api-config.js';
+import {
+  isCustomBaseUrl,
+  loadClaudeSettings,
+  setupApiKey,
+  buildCliEnv,
+  buildWebviewControlledSettingsOverride,
+} from '../../config/api-config.js';
 import { selectWorkingDirectory } from '../../utils/path-utils.js';
 import {
   mapModelIdToSdkName,
@@ -114,7 +120,7 @@ function resolveRequestModelState(modelId, settingsEnv) {
   };
 }
 
-function buildQueryOptions(workingDirectory, sdkModelName, permissionMode, maxThinkingTokens, reasoningEffort, streamingEnabled, systemPromptAppend, requestedSessionId, mcpServers) {
+function buildQueryOptions(workingDirectory, sdkModelName, permissionMode, maxThinkingTokens, reasoningEffort, streamingEnabled, systemPromptAppend, requestedSessionId, mcpServers, modelId) {
   const claudeCliOverride = getClaudeCliPathOverride();
   return {
     cwd: workingDirectory,
@@ -123,6 +129,7 @@ function buildQueryOptions(workingDirectory, sdkModelName, permissionMode, maxTh
     maxTurns: 100,
     enableFileCheckpointing: true,
     env: buildCliEnv(),
+    settings: buildWebviewControlledSettingsOverride(modelId),
     ...(reasoningEffort && { effort: reasoningEffort }),
     ...(maxThinkingTokens !== undefined && { maxThinkingTokens }),
     ...(streamingEnabled && { includePartialMessages: true }),
@@ -203,7 +210,7 @@ async function buildRequestContext(params, withAttachments, overrides = {}) {
   const options = buildQueryOptions(
     workingDirectory, sdkModelName, permissionMode,
     maxThinkingTokens, reasoningEffort, streamingEnabled, systemPromptAppend, requestedSessionId,
-    mcpServers
+    mcpServers, modelId
   );
 
   const userMessage = await buildUserMessage(params, withAttachments, requestedSessionId, resolvedModelId);

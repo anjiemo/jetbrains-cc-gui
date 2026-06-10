@@ -17,7 +17,7 @@ import {
   loadCodexSdk,
   isCodexSdkAvailable,
 } from '../utils/sdk-loader.js';
-import { setupApiKey, buildCliEnv } from '../config/api-config.js';
+import { setupApiKey, buildCliEnv, buildWebviewControlledSettingsOverride } from '../config/api-config.js';
 import { mapModelIdToSdkName } from '../utils/model-utils.js';
 import { getRealHomeDir } from '../utils/path-utils.js';
 import { getClaudeCliPathOverride } from '../utils/claude-cli-path.js';
@@ -320,6 +320,7 @@ async function enhancePromptWithClaude(originalPrompt, systemPrompt, model, cont
     model: sdkModelName,
     maxTurns: 1,
     env: buildCliEnv(),
+    settings: buildWebviewControlledSettingsOverride(model),
     systemPrompt,
     settingSources: ['user', 'project', 'local'],
     ...(claudeCliOverride && { pathToClaudeCodeExecutable: claudeCliOverride }),

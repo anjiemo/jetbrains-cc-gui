@@ -36,7 +36,7 @@ import {
   resetRuntimePersistent,
   getContextUsagePersistent
 } from './services/claude/persistent-query-service.js';
-import { injectNetworkEnvVars } from './config/api-config.js';
+import { injectNetworkEnvVars, isWebviewControlledEnvVar } from './config/api-config.js';
 import { cleanupStaleTempImages } from './services/claude/attachment-service.js';
 
 // =============================================================================
@@ -303,6 +303,12 @@ async function processRequest(request) {
     // set here — they only return timestamps and memory usage.
     if (params.env && typeof params.env === 'object') {
       for (const [key, value] of Object.entries(params.env)) {
+        // Request env can include settings.json values. Do not let stale
+        // environment controls override the webview's per-turn model, context,
+        // or reasoning selections.
+        if (isWebviewControlledEnvVar(key)) {
+          continue;
+        }
         if (value !== undefined && value !== null) {
           // Save original value (undefined means key didn't exist)
           savedEnv[key] = process.env[key];
