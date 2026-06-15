@@ -517,7 +517,9 @@ final class McpRegistryEntryMapper {
         }
 
         String installName() {
-            if (version == null || version.trim().isEmpty() || name.contains("@")) {
+            // A leading '@' is an npm scope (e.g. @scope/pkg), not a version separator;
+            // only treat '@' after the first character as an already-pinned version.
+            if (version == null || version.trim().isEmpty() || name.lastIndexOf('@') > 0) {
                 return name;
             }
             return name + "@" + version;
