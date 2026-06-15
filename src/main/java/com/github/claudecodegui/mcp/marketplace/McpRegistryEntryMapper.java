@@ -209,44 +209,160 @@ final class McpRegistryEntryMapper {
             return null;
         }
         String registryType = normalizeRegistryType(packageDefinition.registryType);
-        if ("npm".equals(registryType)) {
-            return new McpInstallOption(
-                "NPX package",
-                "stdio",
-                "npx",
-                Arrays.asList("-y", packageDefinition.installName()),
-                null,
-                toEnvPlaceholders(variables),
-                null,
-                source.getName(),
-                "local-command"
-            );
+
+        // Environment: server-level variables plus the package's own environmentVariables.
+        Map<String, String> env = new LinkedHashMap<>();
+        env.putAll(toEnvPlaceholders(variables));
+        env.putAll(renderEnvironmentVariables(packageDefinition.environmentVariables()));
+
+        // runtimeArguments precede the package (e.g. uvx --from), packageArguments follow it
+        // (e.g. the required SigV4 endpoint URL, --service, --profile, --region for AWS proxies).
+        List<String> runtimeArgs = renderArguments(packageDefinition.runtimeArguments());
+        List<String> packageArgs = renderArguments(packageDefinition.packageArguments());
+        String transportType = normalizePackageTransport(packageDefinition.transportType());
+
+        List<String> args = new ArrayList<>();
+        String command;
+        String label;
+        String riskLevel;
+
+        if ("docker".equals(registryType)) {
+            command = firstValue(packageDefinition.runtimeHint(), "docker");
+            args.addAll(runtimeArgs.isEmpty() ? Arrays.asList("run", "-i", "--rm") : runtimeArgs);
+            args.add(packageDefinition.name);
+            args.addAll(packageArgs);
+            label = "Docker image";
+            riskLevel = "container-command";
+        } else if ("npm".equals(registryType)) {
+            command = firstValue(packageDefinition.runtimeHint(), "npx");
+            args.addAll(runtimeArgs.isEmpty() ? Arrays.asList("-y") : runtimeArgs);
+            args.add(packageDefinition.installName());
+            args.addAll(packageArgs);
+            label = "NPX package";
+            riskLevel = "local-command";
+        } else if ("pypi".equals(registryType)) {
+            command = firstValue(packageDefinition.runtimeHint(), "uvx");
+            args.addAll(runtimeArgs);
+            args.add(packageDefinition.installName());
+            args.addAll(packageArgs);
+            label = "UVX package";
+            riskLevel = "local-command";
+        } else if (packageDefinition.runtimeHint() != null) {
+            // Unknown registry type but the registry told us how to run it.
+            command = packageDefinition.runtimeHint();
+            args.addAll(runtimeArgs);
+            args.add(packageDefinition.installName());
+            args.addAll(packageArgs);
+            label = command + " package";
+            riskLevel = "local-command";
+        } else {
+            return null;
         }
-        if ("pypi".equals(registryType) || "python".equals(registryType) || "uv".equals(registryType)) {
-            return new McpInstallOption(
-                "UVX package",
-                "stdio",
-                "uvx",
-                Arrays.asList(packageDefinition.installName()),
-                null,
-                toEnvPlaceholders(variables),
-                null,
-                source.getName(),
-                "local-command"
-            );
+
+        return new McpInstallOption(
+            label,
+            transportType,
+            command,
+            args,
+            null,
+            env,
+            null,
+            source.getName(),
+            riskLevel
+        );
+    }
+
+    /**
+     * Renders registry argument descriptors into a flat command-line list.
+     * Named arguments become {@code [name, value]} (or just {@code name} for flags),
+     * positional arguments become {@code [value]}. Missing values fall back to the
+     * {@code valueHint} as a {@code {placeholder}}; explicit {@code {placeholder}} values
+     * are preserved verbatim so the user can fill them in after import.
+     */
+    private static List<String> renderArguments(JsonArray arguments) {
+        List<String> result = new ArrayList<>();
+        if (arguments == null) {
+            return result;
         }
-        if ("docker".equals(registryType) || "oci".equals(registryType)) {
-            return new McpInstallOption(
-                "Docker image",
-                "stdio",
-                "docker",
-                Arrays.asList("run", "-i", "--rm", packageDefinition.name, "stdio"),
-                null,
-                toEnvPlaceholders(variables),
-                null,
-                source.getName(),
-                "container-command"
+        for (JsonElement element : arguments) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject arg = element.getAsJsonObject();
+            String argType = firstValue(McpMarketplaceJson.getString(arg, "type"), "positional");
+            String value = firstValue(
+                McpMarketplaceJson.getString(arg, "value"),
+                McpMarketplaceJson.getString(arg, "default", "defaultValue")
             );
+            if (value == null) {
+                String hint = McpMarketplaceJson.getString(arg, "valueHint", "value_hint");
+                if (hint != null) {
+                    value = "{" + hint + "}";
+                }
+            }
+            if ("named".equalsIgnoreCase(argType)) {
+                String name = McpMarketplaceJson.getString(arg, "name");
+                if (name == null || name.trim().isEmpty()) {
+                    continue;
+                }
+                result.add(name);
+                if (value != null) {
+                    result.add(value);
+                }
+            } else if (value != null) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    /** Renders the package's {@code environmentVariables} into an env map, preserving placeholders. */
+    private static Map<String, String> renderEnvironmentVariables(JsonArray environmentVariables) {
+        Map<String, String> values = new LinkedHashMap<>();
+        if (environmentVariables == null) {
+            return values;
+        }
+        for (JsonElement element : environmentVariables) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject env = element.getAsJsonObject();
+            String name = McpMarketplaceJson.getString(env, "name");
+            if (name == null || name.trim().isEmpty()) {
+                continue;
+            }
+            String value = firstValue(
+                McpMarketplaceJson.getString(env, "value"),
+                McpMarketplaceJson.getString(env, "default", "defaultValue")
+            );
+            if (value == null) {
+                value = "{" + name.toLowerCase(Locale.ROOT) + "}";
+            }
+            values.put(name, value);
+        }
+        return values;
+    }
+
+    private static String normalizePackageTransport(String type) {
+        if (type == null) {
+            return "stdio";
+        }
+        String lower = type.toLowerCase(Locale.ROOT);
+        if (lower.contains("sse")) {
+            return "sse";
+        }
+        if (lower.contains("http")) {
+            return "http";
+        }
+        return "stdio";
+    }
+
+    private static JsonArray getArrayAny(JsonObject object, String... keys) {
+        for (String key : keys) {
+            JsonArray array = McpMarketplaceJson.getArray(object, key);
+            if (array != null) {
+                return array;
+            }
         }
         return null;
     }
@@ -381,11 +497,13 @@ final class McpRegistryEntryMapper {
         private final String registryType;
         private final String name;
         private final String version;
+        private final JsonObject raw;
 
-        private PackageDefinition(String registryType, String name, String version) {
+        private PackageDefinition(String registryType, String name, String version, JsonObject raw) {
             this.registryType = registryType;
             this.name = name;
             this.version = version;
+            this.raw = raw;
         }
 
         static PackageDefinition from(JsonObject object, String fallbackName) {
@@ -393,7 +511,8 @@ final class McpRegistryEntryMapper {
             return new PackageDefinition(
                 McpMarketplaceJson.getString(object, "registry_type", "registryType", "type"),
                 packageName,
-                McpMarketplaceJson.getString(object, "version")
+                McpMarketplaceJson.getString(object, "version"),
+                object
             );
         }
 
@@ -402,6 +521,27 @@ final class McpRegistryEntryMapper {
                 return name;
             }
             return name + "@" + version;
+        }
+
+        String runtimeHint() {
+            return McpMarketplaceJson.getString(raw, "runtimeHint", "runtime_hint");
+        }
+
+        JsonArray runtimeArguments() {
+            return getArrayAny(raw, "runtimeArguments", "runtime_arguments");
+        }
+
+        JsonArray packageArguments() {
+            return getArrayAny(raw, "packageArguments", "package_arguments");
+        }
+
+        JsonArray environmentVariables() {
+            return getArrayAny(raw, "environmentVariables", "environment_variables");
+        }
+
+        String transportType() {
+            JsonObject transport = McpMarketplaceJson.getObject(raw, "transport");
+            return McpMarketplaceJson.getString(transport, "type");
         }
     }
 
