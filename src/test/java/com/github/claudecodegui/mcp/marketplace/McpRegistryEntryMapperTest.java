@@ -20,11 +20,14 @@ public class McpRegistryEntryMapperTest {
     );
 
     private McpInstallOption firstOption(String envelopeJson) {
-        JsonObject envelope = gson.fromJson(envelopeJson, JsonObject.class);
-        McpMarketplaceEntry entry = McpRegistryEntryMapper.fromRegistryObject(envelope, source);
+        McpMarketplaceEntry entry = entryOf(envelopeJson);
         List<McpInstallOption> options = entry.getInstallOptions();
         Assert.assertFalse("expected at least one install option", options.isEmpty());
         return options.get(0);
+    }
+
+    private McpMarketplaceEntry entryOf(String envelopeJson) {
+        return McpRegistryEntryMapper.fromRegistryObject(gson.fromJson(envelopeJson, JsonObject.class), source);
     }
 
     @Test
@@ -119,5 +122,53 @@ public class McpRegistryEntryMapperTest {
         McpInstallOption option = firstOption(envelope);
         Assert.assertEquals("npx", option.getCommand());
         Assert.assertEquals(List.of("-y", "@scope/pkg@1.0"), option.getArgs());
+    }
+
+    @Test
+    public void nonAllowlistedRunnerForKnownTypeFallsBackToCanonicalRunner() {
+        String envelope = "{\"server\":{\"name\":\"x\",\"packages\":[{"
+            + "\"registryType\":\"npm\",\"identifier\":\"p\",\"runtimeHint\":\"bash\""
+            + "}]},\"_meta\":{}}";
+        McpInstallOption option = firstOption(envelope);
+        Assert.assertEquals("npx", option.getCommand());
+        Assert.assertEquals("local-command", option.getRiskLevel());
+    }
+
+    @Test
+    public void unknownRegistryTypeWithUnknownRunnerIsFlaggedUnverified() {
+        String envelope = "{\"server\":{\"name\":\"x\",\"packages\":[{"
+            + "\"registryType\":\"weird\",\"identifier\":\"p\",\"runtimeHint\":\"bash\""
+            + "}]},\"_meta\":{}}";
+        McpInstallOption option = firstOption(envelope);
+        Assert.assertEquals("bash", option.getCommand());
+        Assert.assertEquals("unverified-command", option.getRiskLevel());
+    }
+
+    @Test
+    public void unknownRegistryTypeWithKnownRunnerIsLocalCommand() {
+        String envelope = "{\"server\":{\"name\":\"x\",\"packages\":[{"
+            + "\"registryType\":\"weird\",\"identifier\":\"p\",\"runtimeHint\":\"deno\""
+            + "}]},\"_meta\":{}}";
+        McpInstallOption option = firstOption(envelope);
+        Assert.assertEquals("deno", option.getCommand());
+        Assert.assertEquals("local-command", option.getRiskLevel());
+    }
+
+    @Test
+    public void officialBadgeRequiresStructuredMeta() {
+        // Bare presence of the marker must not earn the badge...
+        Assert.assertFalse(entryOf(
+            "{\"server\":{\"name\":\"x\"},\"_meta\":{\"io.modelcontextprotocol.registry/official\":{}}}").isOfficial());
+        // ...but the registry's structured metadata does.
+        Assert.assertTrue(entryOf(
+            "{\"server\":{\"name\":\"x\"},\"_meta\":{\"io.modelcontextprotocol.registry/official\":{\"id\":\"abc\"}}}").isOfficial());
+    }
+
+    @Test
+    public void officialMarkerOnInnerServerIsNotTrusted() {
+        // A forged marker on the inner (user-controlled) server object must be ignored.
+        Assert.assertFalse(entryOf(
+            "{\"server\":{\"name\":\"x\",\"_meta\":{\"io.modelcontextprotocol.registry/official\":{\"id\":\"abc\"}}},\"_meta\":{}}")
+            .isOfficial());
     }
 }

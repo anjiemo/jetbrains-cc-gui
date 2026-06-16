@@ -999,6 +999,8 @@
       "docs": "Documentation",
       "homepage": "Site web",
       "installOption": "Option d'installation",
+      "riskWarning": "Cette option exécute une commande sur votre machine. Vérifiez-la avant de l'ajouter.",
+      "riskWarningUnverified": "Cette option exécute une commande non reconnue. Ne l'ajoutez que si vous faites confiance à la source.",
       "noInstall": "Cette source n'expose que des métadonnées de découverte. Ajoutez ce serveur manuellement après avoir consulté les instructions de son dépôt.",
       "configPreview": "Aperçu de la configuration"
     },

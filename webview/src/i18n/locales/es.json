@@ -999,6 +999,8 @@
       "docs": "Documentación",
       "homepage": "Página principal",
       "installOption": "Opción de instalación",
+      "riskWarning": "Esta opción ejecuta un comando en tu equipo. Revísalo antes de añadirlo.",
+      "riskWarningUnverified": "Esta opción ejecuta un comando no reconocido. Añádelo solo si confías en la fuente.",
       "noInstall": "Esta fuente solo expone metadatos de descubrimiento. Añade este servidor manualmente tras revisar las instrucciones de su repositorio.",
       "configPreview": "Vista previa de configuración"
     },

@@ -1,162 +1,164 @@
-# MCP Marketplace – Integrationsanalyse & Stand
+# MCP Marketplace – Integration & State
 
-> Status: **implementiert** (PR gegen `upstream/feature/v0.4.6`)
+> Status: **implemented** (PR against `upstream/feature/v0.4.6`)
 > Branch: `feature/mcp-marketplace`
-> Erstellt: 2026-06-15 · Aktualisiert: 2026-06-15
 >
-> Architektur-Leitlinie: **reines Java-Backend, Webview nur zur Anzeige.**
+> Architecture principle: **all discovery/mapping logic in the Java backend; the
+> webview only displays dialogs and previews.**
 
-Dieses Dokument beschreibt, **wo** der MCP-Marketplace in den Settings andockt
-und **was umgesetzt** ist.
+This document describes **where** the MCP Marketplace hooks into Settings and
+**what** is implemented.
 
 ---
 
-## 1. Einstieg in der UI (Settings)
+## 1. Entry point in the UI (Settings)
 
-| Schritt | Datei |
+| Step | File |
 | --- | --- |
-| Sidebar-Eintrag `mcp` | `webview/src/components/settings/SettingsSidebar/index.tsx` (Zeile 4 + 17) |
-| Routing auf die Section | `webview/src/components/settings/PlaceholderSection/index.tsx` (`type === 'mcp'` → `McpSettingsSection`) |
-| Eigentliche MCP-Section | `webview/src/components/mcp/McpSettingsSection.tsx` |
+| Sidebar item `mcp` | `webview/src/components/settings/SettingsSidebar/index.tsx` |
+| Routing to the section | `webview/src/components/settings/PlaceholderSection/index.tsx` (`type === 'mcp'` → `McpSettingsSection`) |
+| The MCP section itself | `webview/src/components/mcp/McpSettingsSection.tsx` |
 
-Der Tab `mcp` ist als `SettingsTab` definiert und wird über die `PlaceholderSection`
-an `McpSettingsSection` durchgereicht.
-
----
-
-## 2. Die zentrale Integrationsstelle (der „Hook")
-
-In `McpSettingsSection.tsx` öffnet das Dropdown des Add-Buttons den Eintrag
-**„Add from MCP market"** über `handleAddFromMarket`. Vor dem Patch zeigte das nur
-einen `mcp.marketComingSoon`-Toast; **der Patch biegt es auf den Marketplace-Dialog um**:
-
-```tsx
-// McpSettingsSection.tsx (nach Patch)
-const handleAddFromMarket = useCallback(() => {
-  setShowDropdown(false);
-  setShowMarketplaceDialog(true);   // statt Coming-soon-Toast
-}, []);
-```
-
-`onSelect` des Dialogs ist `handleSaveServer` – es läuft also derselbe Add-Pfad wie
-beim manuellen Anlegen (`add_${prefix}mcp_server`). Kein neuer Persistenzpfad nötig.
+The `mcp` tab is a `SettingsTab` and is routed through `PlaceholderSection` to
+`McpSettingsSection`.
 
 ---
 
-## 3. Was der Patch liefert (`codriver-mcp-marketplace.patch`)
+## 2. The integration hook
 
-> `git apply --check` läuft **sauber** durch (nur neue Dateien + 4 kleine Einschübe).
+The add-button dropdown in `McpSettingsSection.tsx` exposes two new actions:
 
-### 3.1 Java-Backend (reine Logik, neues Package `mcp/marketplace`)
+- **Add from MCP market** → `handleAddFromMarket` opens `McpMarketplaceDialog`.
+- **Import from GitHub Copilot** → `handleImportFromCopilot` opens `McpImportDialog`.
 
-| Datei | Aufgabe |
+Both dialogs persist through the existing add path (`add_${prefix}mcp_server`,
+via `handleSaveServer` / `handleImportServers`); no new persistence path is introduced.
+
+---
+
+## 3. Architecture
+
+### 3.1 Java backend (logic only, package `mcp/marketplace` + `mcp/importer`)
+
+| File | Responsibility |
 | --- | --- |
-| `handler/marketplace/McpMarketplaceHandler.java` | Bridge-Handler: `get_mcp_marketplace_sources`, `search_mcp_marketplace` → `window.updateMcpMarketplace*` |
-| `mcp/marketplace/McpMarketplaceService.java` | Orchestriert Quellen: laden, **dedupe**, Suche/Filter, Sortierung (official → installable → Name), Cap 250 |
-| `mcp/marketplace/McpMarketplaceSource.java` | Quellen-Modell + `defaults()` (siehe 3.3) |
-| `mcp/marketplace/BuiltInMcpMarketplaceClient.java` | Die bisherigen 5 Presets als Built-in-Quelle |
-| `mcp/marketplace/RegistryMarketplaceClient.java` | MCP-Registry v0.1 (paginiert via `next_cursor`) |
-| `mcp/marketplace/GitHubOrgMarketplaceClient.java` | GitHub-Org-Repos (sterne-sortiert, paginiert) |
-| `mcp/marketplace/McpRegistryEntryMapper.java` | Normalisiert Registry-/GitHub-JSON → Entry inkl. Install-Optionen: npm→`npx -y`, pypi→`uvx`, docker→`docker run`; Secret-/Header-**Platzhalter** |
-| `mcp/marketplace/McpMarketplaceHttpClient.java` | HTTP GET + Platten-Cache (TTL 1 h, Stale-Fallback, optional `GITHUB_TOKEN`) |
-| `mcp/marketplace/McpMarketplaceEntry.java` / `McpInstallOption.java` / `McpMarketplaceJson.java` | Modelle + JSON-Helper |
-| `ui/ChatWindowDelegate.java` | Registriert `McpMarketplaceHandler` neben `McpServerHandler` |
+| `handler/marketplace/McpMarketplaceHandler.java` | Bridge handler: `get_mcp_marketplace_sources`, `search_mcp_marketplace` → `window.updateMcpMarketplace*` |
+| `mcp/marketplace/McpMarketplaceService.java` | Orchestrates sources: load, dedupe, search/filter, sort (official → installable → name), cap 250 |
+| `mcp/marketplace/McpMarketplaceSource.java` | Source model + `defaults()` (see 3.3) |
+| `mcp/marketplace/BuiltInMcpMarketplaceClient.java` | The curated presets as a built-in source |
+| `mcp/marketplace/RegistryMarketplaceClient.java` | MCP Registry v0.1 client (cursor pagination) |
+| `mcp/marketplace/GitHubOrgMarketplaceClient.java` | GitHub org repos (star-sorted, paginated) |
+| `mcp/marketplace/McpRegistryEntryMapper.java` | Normalizes registry/GitHub JSON → entries + install options |
+| `mcp/marketplace/McpMarketplaceHttpClient.java` | HTTP GET + on-disk cache (1 h TTL, stale fallback, response size cap) |
+| `mcp/importer/McpServerImportService.java` | Parses a GitHub Copilot config (root key `servers`) → internal server objects |
+| `handler/importer/McpServerImportHandler.java` | Bridge handler for Copilot parse/preview |
+| `ui/ChatWindowDelegate.java` | Registers the new handlers |
 
-### 3.2 Webview (nur Anzeige)
+### 3.2 Webview (display only)
 
-- `components/mcp/McpMarketplaceDialog.tsx` – Browser mit Suchfeld, **Quellen-Dropdown**,
-  Liste, Detail-Panel, Install-Optionen-Auswahl und **Config-Preview** vor dem Hinzufügen.
-- `McpSettingsSection.tsx` – `showMarketplaceDialog`-State, Dialog verdrahtet, `onSelect = handleSaveServer`.
-- `types/mcp.ts` – `McpMarketplaceSource`, `McpInstallOption`, `McpMarketplaceEntry`, `McpMarketplaceSearchResponse`.
-- `global.d.ts` – Callbacks `updateMcpMarketplaceSources` / `updateMcpMarketplaceEntries`.
-- `styles/less/components/mcp.less` – Styles für den Dialog.
+- `components/mcp/McpMarketplaceDialog.tsx` – browser with search, **source dropdown**,
+  list, detail panel, install-option selection and a config preview before adding.
+- `components/mcp/McpImportDialog.tsx` – paste a Copilot config, request a preview from
+  the backend, resolve id collisions, and import.
+- `components/mcp/ServerToolsPanel.tsx` – shows the concrete backend error under "Load failed".
+- `McpSettingsSection.tsx`, `types/mcp.ts`, `global.d.ts`, `styles/less/components/mcp.less`,
+  `i18n/locales/*.json`.
 
-Der alte `McpPresetDialog` **bleibt unangetastet** – additiv, nichts wird kaputtgemacht.
+The pre-existing `McpPresetDialog` is left untouched; everything is additive.
 
-### 3.3 Quellen (getrennt, im Dropdown wählbar) – `McpMarketplaceSource.defaults()`
+### 3.3 Sources (separated, selectable in the dropdown) – `McpMarketplaceSource.defaults()`
 
-| id | Name | Typ | URL |
+| id | Name | Type | URL |
 | --- | --- | --- | --- |
-| `built-in` | Built-in Presets | `BUILT_IN` | (lokal) |
+| `built-in` | Built-in Presets | `BUILT_IN` | (local) |
 | `official-registry` | Official MCP Registry | `REGISTRY` | `registry.modelcontextprotocol.io` |
 | `github-mcp-registry` | GitHub MCP Registry | `REGISTRY` | `api.mcp.github.com` |
 | `official-github-org` | MCP Official GitHub Org | `GITHUB_ORG` | `github.com/modelcontextprotocol` |
 
-Dazu die Pseudo-Quelle **„All sources"** (`all`) im Dropdown, die quellenübergreifend sucht.
+Plus the pseudo-source **"All sources"** (`all`), which searches across all of them.
 
 ---
 
-## 4. Abgleich mit den Anforderungen
+## 4. Implemented details
 
-| Anforderung | Status | Hinweis |
+### 4.1 Source-selection persistence
+
+`selectedSourceId` is initialized from `localStorage` (`readPreferredSourceId`) and
+written back on every change (`rememberPreferredSourceId`, key
+`codriver.mcp.marketplace.lastSourceId`). If the stored source no longer exists, the
+dialog falls back to `built-in`. The Java layer holds no view state.
+
+### 4.2 i18n
+
+All dialog strings go through `t('mcp.market.*')` / `t('mcp.import.*')`; keys exist in
+all 10 locales (`webview/src/i18n/locales/*.json`).
+
+### 4.3 Registry schema (v0.1)
+
+Both `official-registry` and `github-mcp-registry` return the wrapped envelope
+`{ server, _meta }` with `metadata.nextCursor`. `McpRegistryEntryMapper` unwraps the
+`server` object and renders install options from `packages[]` including `runtimeHint`,
+`runtimeArguments`, `packageArguments` (positional/named), `environmentVariables` and
+`transport.type`; `{placeholder}` values are preserved. Covered by
+`McpRegistryEntryMapperTest`.
+
+### 4.4 GitHub Copilot import
+
+`McpServerImportService` maps the Copilot format (root key `servers`) into the same
+internal server entries as a manual add: it merges `requestInit.headers` + `headers`
+(dropping null values), infers `type` (command → stdio, `/sse` URL → sse, else http),
+preserves `command`/`args`/`env`/`url`/`type`/`x-metadata`, and renames colliding ids
+instead of overwriting. The dialog previews the full spec before saving. Covered by
+`McpServerImportServiceTest`.
+
+### 4.5 Security hardening
+
+- **External links** (`McpMarketplaceDialog`) are rendered only when the URL scheme is
+  `http`/`https` (`isSafeHttpUrl`) and always carry `target="_blank" rel="noopener noreferrer"`,
+  preventing `javascript:`-scheme execution in the JCEF webview.
+- **Command allowlist** (`McpRegistryEntryMapper`): for known registry types a
+  non-allowlisted `runtimeHint` is ignored in favour of the canonical runner; for unknown
+  types the command is honoured but marked `unverified-command`. Risky install options
+  (`local-command` / `container-command` / `unverified-command`) render a prominent
+  warning banner before the user adds them.
+- **`official` badge** is trusted only from the outer registry `_meta` and only when it
+  carries structured metadata (not mere key presence).
+- **`GITHUB_TOKEN`** is sent only to an exact allowlist of GitHub hosts.
+- **Response size cap** (10 MB) in `McpMarketplaceHttpClient` guards against
+  memory-exhaustion from a hostile source.
+
+> Later polish: an "installed" badge (diff against `servers` from `useServerData`),
+> secret entry via a pre-filled `McpServerDialog` for placeholder entries, and
+> Codex-specific mapping (`CodexMcpServerSpec`: `http_headers`, `bearer_token_env_var`).
+> The interactive GUI smoke test in the sandbox IDE (Claude **and** Codex) is still open.
+
+---
+
+## 5. "Official" in the MCP context
+
+MCP is an open standard adopted by both Anthropic (Claude) and OpenAI (Codex/ChatGPT)
+as *clients* — this plugin is multi-provider anyway (`apps: { claude, codex, gemini }`).
+There are therefore no competing "Anthropic" vs. "OpenAI" registries; "official" here
+means the **neutral** source of the MCP project:
+
+| Source | Kind | Role |
 | --- | --- | --- |
-| Reines Java-Backend, Webview nur Anzeige | ✅ erfüllt | Logik komplett in `mcp/marketplace/*` |
-| Quellen getrennt | ✅ erfüllt | `SourceType {BUILT_IN, REGISTRY, GITHUB_ORG}` |
-| Dropdown zur Quellenwahl | ✅ erfüllt | `marketplace-source-select` im Dialog |
-| Vorhandenes nicht kaputtmachen | ✅ erfüllt | rein additiv, `McpPresetDialog` bleibt |
-| **Favorit bleibt selektiert** (über Sessions/Öffnen) | ✅ erfüllt | `localStorage`, siehe 5.1 |
+| `github.com/modelcontextprotocol/servers` (README list) | curated, **no API** | basis for the `built-in` presets |
+| `registry.modelcontextprotocol.io` | canonical **registry with REST API** | the `official-registry` source |
+
+The result is a hybrid: a built-in offline seed **plus** the live registry — without a
+third-party API key (unlike Smithery/mcp.so, which were intentionally not included).
 
 ---
 
-## 5. Umgesetzte Details
+## 6. File references
 
-### 5.1 Persistenz der Quellenwahl
-
-`selectedSourceId` wird im `McpMarketplaceDialog` aus `localStorage` initialisiert
-(`readPreferredSourceId`) und bei jeder Änderung zurückgeschrieben
-(`rememberPreferredSourceId`, Key `codriver.mcp.marketplace.lastSourceId`). Existiert
-die gespeicherte Quelle nicht mehr, fällt der Dialog auf `built-in` zurück. Die
-Java-Schicht bleibt frei von View-Zustand (folgt dem `LAST_SERVER_ID`-Muster).
-
-### 5.2 i18n
-
-Alle Dialog-Strings laufen über `t('mcp.market.*')` bzw. `t('mcp.import.*')`; die
-Keys liegen in allen 10 Locales (`webview/src/i18n/locales/*.json`).
-
-### 5.3 Registry-Schema (v0.1)
-
-Sowohl `official-registry` als auch `github-mcp-registry` liefern die verschachtelte
-Hülle `{ server, _meta }` mit `metadata.nextCursor`. `McpRegistryEntryMapper` entpackt
-die `server`-Hülle und rendert die Install-Optionen aus `packages[]` inklusive
-`runtimeHint`, `runtimeArguments`, `packageArguments` (positional/named),
-`environmentVariables` und `transport.type`; `{placeholder}`-Werte bleiben erhalten.
-Abgedeckt durch `McpRegistryEntryMapperTest`.
-
-> Spätere Politur: „installiert"-Badge (Abgleich mit `servers` aus `useServerData`),
-> Secret-Eingabe über vorbefüllten `McpServerDialog` statt direktem Hinzufügen bei
-> Einträgen mit Platzhaltern, Codex-spezifisches Mapping (`CodexMcpServerSpec`:
-> `http_headers`, `bearer_token_env_var`). Offen bleibt der interaktive GUI-Smoke-Test
-> in der Sandbox-IDE (Claude **und** Codex).
-
----
-
-## 7. „Offiziell" im MCP-Kontext (Hintergrund zur Quellenwahl)
-
-MCP ist ein **offener Standard**, den sowohl Anthropic (Claude) als auch OpenAI
-(Codex/ChatGPT) als *Clients* nutzen – dieses Plugin ist ohnehin multi-provider
-(`apps: { claude, codex, gemini }`). Es gibt daher keine konkurrierenden
-„Anthropic-" vs. „OpenAI-Registries". „Offiziell" meint hier die **neutrale** Quelle
-des MCP-Projekts:
-
-| Quelle | Art | Rolle im Patch |
-| --- | --- | --- |
-| `github.com/modelcontextprotocol/servers` (README-Liste) | kuratiert, **keine API** | Basis der `built-in`-Presets |
-| `registry.modelcontextprotocol.io` | kanonische **Registry mit REST-API** | `official-registry`-Quelle |
-
-Der Patch realisiert damit faktisch einen **Hybrid**: Built-in-Bundle als
-Offline-Seed **plus** Live-Registry – ohne Drittanbieter-API-Key (anders als
-Smithery/mcp.so, die bewusst nicht aufgenommen wurden).
-
----
-
-## 8. Datei-Referenzen (Kurzfassung)
-
-- Patch: `codriver-mcp-marketplace.patch` (Repo-Root)
-- Hook-Punkt: `webview/src/components/mcp/McpSettingsSection.tsx` (`handleAddFromMarket`)
-- Neuer Dialog: `webview/src/components/mcp/McpMarketplaceDialog.tsx` (Quellen-Dropdown, Persistenz-Lücke)
-- Java-Backend: `src/main/java/com/github/claudecodegui/mcp/marketplace/*`
-- Java-Handler: `src/main/java/com/github/claudecodegui/handler/marketplace/McpMarketplaceHandler.java`
-- Handler-Registrierung: `src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java`
-- Add-Pfad (unverändert): `src/main/java/com/github/claudecodegui/handler/McpServerHandler.java`
-- Typen: `webview/src/types/mcp.ts` (Marketplace-Typen am Dateiende)
-- i18n (offen): `webview/src/i18n/locales/*.json` (`mcp.market.*`)
+- Hook point: `webview/src/components/mcp/McpSettingsSection.tsx`
+- Dialogs: `McpMarketplaceDialog.tsx`, `McpImportDialog.tsx`
+- Java marketplace: `src/main/java/com/github/claudecodegui/mcp/marketplace/*`
+- Java importer: `src/main/java/com/github/claudecodegui/mcp/importer/*`
+- Handlers: `src/main/java/com/github/claudecodegui/handler/{marketplace,importer}/*`
+- Handler registration: `src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java`
+- Types: `webview/src/types/mcp.ts`
+- i18n: `webview/src/i18n/locales/*.json` (`mcp.market.*`, `mcp.import.*`)
+- Tests: `McpRegistryEntryMapperTest`, `McpServerImportServiceTest`, `McpMarketplaceHttpClientTest`

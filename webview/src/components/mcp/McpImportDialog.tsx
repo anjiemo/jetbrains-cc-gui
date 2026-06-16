@@ -106,14 +106,6 @@ export function McpImportDialog({ currentProvider = 'claude', existingIds = [], 
     }
   };
 
-  const summarize = (server: McpServer): string => {
-    const spec = server.server || {};
-    if (spec.command) {
-      return [spec.command, ...(spec.args || [])].join(' ');
-    }
-    return spec.url || '';
-  };
-
   const renamedCount = useMemo(() => preview.filter(item => item.renamed).length, [preview]);
 
   return (
@@ -164,25 +156,23 @@ export function McpImportDialog({ currentProvider = 'claude', existingIds = [], 
             ) : (
               <>
                 {preview.length > 0 && <div className="mcp-import-preview-title">{t('mcp.import.previewTitle')}</div>}
-                {preview.map(item => {
-                  const summary = summarize(item.server);
-                  return (
-                    <div key={item.finalId} className="mcp-import-item">
-                      <div className="mcp-import-item-icon">{(item.server.name || item.finalId).charAt(0).toUpperCase()}</div>
-                      <div className="mcp-import-item-info">
-                        <div className="mcp-import-item-title-row">
-                          <span className="mcp-import-item-name">{item.server.name || item.finalId}</span>
-                          <span className="mcp-import-type-badge">{item.server.server?.type || 'stdio'}</span>
-                          {item.renamed && (
-                            <span className="mcp-import-renamed">{t('mcp.import.renamedFrom', { id: item.originalId })}</span>
-                          )}
-                        </div>
-                        <div className="mcp-import-item-id">{item.finalId}</div>
-                        {summary && <div className="mcp-import-item-cmd">{summary}</div>}
+                {preview.map(item => (
+                  <div key={item.finalId} className="mcp-import-item">
+                    <div className="mcp-import-item-icon">{(item.server.name || item.finalId).charAt(0).toUpperCase()}</div>
+                    <div className="mcp-import-item-info">
+                      <div className="mcp-import-item-title-row">
+                        <span className="mcp-import-item-name">{item.server.name || item.finalId}</span>
+                        <span className="mcp-import-type-badge">{item.server.server?.type || 'stdio'}</span>
+                        {item.renamed && (
+                          <span className="mcp-import-renamed">{t('mcp.import.renamedFrom', { id: item.originalId })}</span>
+                        )}
                       </div>
+                      <div className="mcp-import-item-id">{item.finalId}</div>
+                      {/* Full spec so env/headers are visible before the user confirms the import. */}
+                      <pre className="mcp-import-item-spec">{JSON.stringify(item.server.server, null, 2)}</pre>
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </>
             )}
           </div>

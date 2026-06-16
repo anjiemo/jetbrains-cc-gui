@@ -1191,6 +1191,8 @@
       "docs": "Docs",
       "homepage": "Homepage",
       "installOption": "Install option",
+      "riskWarning": "This option runs a command on your machine. Review it before adding.",
+      "riskWarningUnverified": "This option runs an unrecognized command. Only add it if you trust the source.",
       "noInstall": "This source exposes discovery metadata only. Add this server manually after checking its repository instructions.",
       "configPreview": "Configuration preview"
     },

@@ -1169,6 +1169,8 @@
       "docs": "Documentação",
       "homepage": "Página inicial",
       "installOption": "Opção de instalação",
+      "riskWarning": "Esta opção executa um comando na sua máquina. Revise-a antes de adicionar.",
+      "riskWarningUnverified": "Esta opção executa um comando não reconhecido. Adicione-a apenas se confiar na fonte.",
       "noInstall": "Esta fonte expõe apenas metadados de descoberta. Adicione este servidor manualmente após verificar as instruções do repositório.",
       "configPreview": "Pré-visualização da configuração"
     },

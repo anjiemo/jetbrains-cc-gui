@@ -31,6 +31,29 @@ function rememberPreferredSourceId(sourceId: string) {
 }
 
 /**
+ * Marketplace URLs come from untrusted registry payloads. React does not sanitize the
+ * `href` scheme, so a `javascript:` link would execute in the webview. Only allow http(s).
+ */
+function isSafeHttpUrl(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/** Install options that launch a command/container locally warrant a prominent warning. */
+function isRiskyInstallOption(option: McpInstallOption): boolean {
+  return option.riskLevel === 'local-command'
+    || option.riskLevel === 'container-command'
+    || option.riskLevel === 'unverified-command';
+}
+
+/**
  * MCP Marketplace Browser adapted from the former Swing registry browser.
  */
 export function McpMarketplaceDialog({ currentProvider = 'claude', existingIds = [], onClose, onSelect }: McpMarketplaceDialogProps) {
@@ -288,9 +311,9 @@ function MarketplaceDetails({ entry, selectedOptionIndex, onSelectedOptionIndexC
       </div>
 
       <div className="marketplace-link-grid">
-        {entry.repositoryUrl && <a href={entry.repositoryUrl}>{t('mcp.market.repository')}</a>}
-        {entry.docsUrl && <a href={entry.docsUrl}>{t('mcp.market.docs')}</a>}
-        {entry.homepage && <a href={entry.homepage}>{t('mcp.market.homepage')}</a>}
+        {isSafeHttpUrl(entry.repositoryUrl) && <a href={entry.repositoryUrl} target="_blank" rel="noopener noreferrer">{t('mcp.market.repository')}</a>}
+        {isSafeHttpUrl(entry.docsUrl) && <a href={entry.docsUrl} target="_blank" rel="noopener noreferrer">{t('mcp.market.docs')}</a>}
+        {isSafeHttpUrl(entry.homepage) && <a href={entry.homepage} target="_blank" rel="noopener noreferrer">{t('mcp.market.homepage')}</a>}
       </div>
 
       {entry.installOptions.length > 0 ? (
@@ -323,8 +346,18 @@ interface InstallPreviewProps {
 function InstallPreview({ option }: InstallPreviewProps) {
   const { t } = useTranslation();
   const preview = createPreviewConfig(option);
+  const risky = isRiskyInstallOption(option);
+  const warningKey = option.riskLevel === 'unverified-command'
+    ? 'mcp.market.riskWarningUnverified'
+    : 'mcp.market.riskWarning';
   return (
     <div className="marketplace-install-preview">
+      {risky && (
+        <div className={`marketplace-risk-warning ${option.riskLevel === 'unverified-command' ? 'severe' : ''}`}>
+          <span className="codicon codicon-warning"></span>
+          <span>{t(warningKey)}</span>
+        </div>
+      )}
       <div className="marketplace-preview-header">
         <span className="codicon codicon-terminal"></span>
         {t('mcp.market.configPreview')}

@@ -6,17 +6,27 @@ import com.google.gson.JsonObject;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Maps MCP registry JSON envelopes into CoDriver marketplace entries.
  */
 final class McpRegistryEntryMapper {
 
+    /** Package runners the marketplace is willing to invoke without flagging them as unverified. */
+    private static final Set<String> KNOWN_RUNNERS = new HashSet<>(Arrays.asList(
+        "npx", "uvx", "uv", "pnpm", "pnpx", "bunx", "node", "deno", "python", "python3", "docker", "podman"));
+
     private McpRegistryEntryMapper() {
+    }
+
+    private static boolean isKnownRunner(String runner) {
+        return runner != null && KNOWN_RUNNERS.contains(runner.trim().toLowerCase(Locale.ROOT));
     }
 
     static McpMarketplaceEntry fromRegistryObject(JsonObject envelope, McpMarketplaceSource source) {
@@ -46,8 +56,9 @@ final class McpRegistryEntryMapper {
         );
         String status = firstValue(McpMarketplaceJson.getString(data, "status"), "active");
         String repositoryUrl = getRepositoryUrl(data);
-        // The "official" marker lives in the outer envelope's _meta, but tolerate it on the server too.
-        boolean official = isOfficial(envelope) || isOfficial(data);
+        // The "official" marker is only trusted from the outer envelope's registry _meta,
+        // never from the inner server object (which carries user-submitted fields).
+        boolean official = isOfficial(envelope);
 
         McpMarketplaceEntry.Builder builder = McpMarketplaceEntry.builder()
             .id(source.getId() + ":" + name)
@@ -225,36 +236,40 @@ final class McpRegistryEntryMapper {
         String command;
         String label;
         String riskLevel;
+        String hint = packageDefinition.runtimeHint();
 
         if ("docker".equals(registryType)) {
-            command = firstValue(packageDefinition.runtimeHint(), "docker");
+            // For a known type, a non-allowlisted runtimeHint is ignored in favour of the
+            // canonical runner so a registry entry cannot turn the command into anything it likes.
+            command = isKnownRunner(hint) ? hint : "docker";
             args.addAll(runtimeArgs.isEmpty() ? Arrays.asList("run", "-i", "--rm") : runtimeArgs);
             args.add(packageDefinition.name);
             args.addAll(packageArgs);
             label = "Docker image";
             riskLevel = "container-command";
         } else if ("npm".equals(registryType)) {
-            command = firstValue(packageDefinition.runtimeHint(), "npx");
+            command = isKnownRunner(hint) ? hint : "npx";
             args.addAll(runtimeArgs.isEmpty() ? Arrays.asList("-y") : runtimeArgs);
             args.add(packageDefinition.installName());
             args.addAll(packageArgs);
             label = "NPX package";
             riskLevel = "local-command";
         } else if ("pypi".equals(registryType)) {
-            command = firstValue(packageDefinition.runtimeHint(), "uvx");
+            command = isKnownRunner(hint) ? hint : "uvx";
             args.addAll(runtimeArgs);
             args.add(packageDefinition.installName());
             args.addAll(packageArgs);
             label = "UVX package";
             riskLevel = "local-command";
-        } else if (packageDefinition.runtimeHint() != null) {
-            // Unknown registry type but the registry told us how to run it.
-            command = packageDefinition.runtimeHint();
+        } else if (hint != null && !hint.trim().isEmpty()) {
+            // Unknown registry type: there is no canonical runner to fall back to, so the
+            // registry-provided command is honoured but flagged when it is not a known runner.
+            command = hint;
             args.addAll(runtimeArgs);
             args.add(packageDefinition.installName());
             args.addAll(packageArgs);
             label = command + " package";
-            riskLevel = "local-command";
+            riskLevel = isKnownRunner(hint) ? "local-command" : "unverified-command";
         } else {
             return null;
         }
@@ -427,7 +442,12 @@ final class McpRegistryEntryMapper {
     private static boolean isOfficial(JsonObject envelope) {
         JsonObject meta = McpMarketplaceJson.getObject(envelope, "_meta");
         JsonObject official = McpMarketplaceJson.getObject(meta, "io.modelcontextprotocol.registry/official");
-        return official != null;
+        if (official == null) {
+            return false;
+        }
+        // Require the registry's own structured metadata rather than mere key presence,
+        // which a malicious entry could forge to earn the "official" badge.
+        return official.has("id") || official.has("publishedAt") || official.has("isLatest");
     }
 
     private static String getRepositoryUrl(JsonObject envelope) {

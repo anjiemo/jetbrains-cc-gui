@@ -1004,6 +1004,8 @@
       "docs": "文件",
       "homepage": "首頁",
       "installOption": "安裝選項",
+      "riskWarning": "此選項會在你的裝置上執行命令。新增前請仔細核對。",
+      "riskWarningUnverified": "此選項會執行無法識別的命令。僅在你信任來源時才新增。",
       "noInstall": "此來源僅提供探索中繼資料。請在檢視其儲存庫說明後手動新增此伺服器。",
       "configPreview": "設定預覽"
     },

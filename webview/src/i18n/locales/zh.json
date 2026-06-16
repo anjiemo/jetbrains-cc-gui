@@ -1196,6 +1196,8 @@
       "docs": "文档",
       "homepage": "主页",
       "installOption": "安装选项",
+      "riskWarning": "此选项会在你的设备上运行命令。添加前请仔细核对。",
+      "riskWarningUnverified": "此选项会运行无法识别的命令。仅在你信任来源时才添加。",
       "noInstall": "此来源仅提供发现元数据。请在查看其代码仓库说明后手动添加此服务器。",
       "configPreview": "配置预览"
     },
