@@ -89,8 +89,8 @@ public class SessionLifecycleManager {
                          + ", provider=" + previousProvider + ", model=" + previousModel);
 
         host.invalidateSessionCallbacks();
-        host.getStreamCoalescer().resetStreamState();
-        host.callJavaScript("clearMessages");
+        long clearBarrierSeq = host.getStreamCoalescer().resetStreamState();
+        host.callJavaScript("clearMessages", String.valueOf(clearBarrierSeq));
 
         CompletableFuture<Void> interruptFuture = oldSession != null
                                                           ? oldSession.interrupt()
@@ -137,8 +137,8 @@ public class SessionLifecycleManager {
         ClaudeSession oldSession = host.getSession();
 
         host.invalidateSessionCallbacks();
-        host.getStreamCoalescer().resetStreamState();
-        host.callJavaScript("clearMessages");
+        long clearBarrierSeq = host.getStreamCoalescer().resetStreamState();
+        host.callJavaScript("clearMessages", String.valueOf(clearBarrierSeq));
 
         CompletableFuture<Void> interruptFuture = oldSession != null
                 ? oldSession.interrupt()
@@ -226,8 +226,8 @@ public class SessionLifecycleManager {
                          + ", provider=" + previousProvider + ", model=" + previousModel);
 
         host.invalidateSessionCallbacks();
-        host.getStreamCoalescer().resetStreamState();
-        host.callJavaScript("clearMessages");
+        long clearBarrierSeq = host.getStreamCoalescer().resetStreamState();
+        host.callJavaScript("clearMessages", String.valueOf(clearBarrierSeq));
         host.clearPendingPermissionRequests();
         host.clearPermissionDecisionMemory();
 

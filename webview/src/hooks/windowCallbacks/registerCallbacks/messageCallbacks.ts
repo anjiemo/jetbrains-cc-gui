@@ -407,6 +407,13 @@ export function registerMessageCallbacks(
           pendingUpdateSequence = null;
           window.__pendingUpdateJson = null;
           window.__pendingUpdateSequence = null;
+          // A session transition may have begun while this frame was buffered.
+          // processUpdateMessages does not re-check the transition guard, so
+          // enforce it here — otherwise a stale snapshot deferred during the
+          // outgoing session's streaming would run down the non-streaming path
+          // (isStreamingRef was cleared by beginSessionTransition) and resurrect
+          // the cleared messages.
+          if (window.__sessionTransitioning) return;
           if (latestJson) {
             processUpdateMessages(latestJson, latestSequence);
           }
@@ -555,7 +562,21 @@ export function registerMessageCallbacks(
     });
   };
 
-  window.clearMessages = () => {
+  window.clearMessages = (barrierSequenceArg) => {
+    // Advance the sequence barrier so any updateMessages still in flight from
+    // the previous session are rejected. Such a snapshot may already have been
+    // dispatched to JS and be sitting in the JCEF IPC channel, so neither the
+    // backend's post-reset sequence check nor the __sessionTransitioning
+    // time-window guard can stop it once that guard is released. The barrier is
+    // the backend coalescer's post-reset updateSequence; stale snapshots carry a
+    // strictly smaller sequence. Closes the "new session does not clear" race.
+    const barrierSequence = parseSequence(barrierSequenceArg);
+    if (barrierSequence != null) {
+      window.__minAcceptedUpdateSequence = Math.max(
+        window.__minAcceptedUpdateSequence ?? 0,
+        barrierSequence,
+      );
+    }
     // Cancel any pending deferred updateMessages to prevent stale data from
     // being applied after messages are cleared.
     if (pendingUpdateRaf !== null) {

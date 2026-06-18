@@ -13,7 +13,6 @@ import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.session.SessionCallbackAdapter;
 import com.github.claudecodegui.session.SessionLifecycleManager;
-import com.github.claudecodegui.session.SessionLoadService;
 import com.github.claudecodegui.session.StreamMessageCoalescer;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.settings.TabStateService;
@@ -271,7 +270,6 @@ public class ClaudeChatWindow {
         ToolWindowManager.getInstance(this.project).invokeLater(() -> {
             if (!this.disposed) {
                 this.webviewInitializer.createUIComponents();
-                registerSessionLoadListener();
                 this.initialized = true;
                 LOG.info("Window instance fully initialized, project: " + this.project.getName());
             }
@@ -812,13 +810,6 @@ public class ClaudeChatWindow {
         session.setSessionInfo(null, workingDirectory);
         persistTabSessionState();
         LOG.info("Initialized with working directory: " + workingDirectory);
-    }
-
-    private void registerSessionLoadListener() {
-        SessionLoadService.getInstance().setListener((sessionId, projectPath) -> {
-            ApplicationManager.getApplication().invokeLater(() ->
-                    sessionLifecycleManager.loadHistorySession(sessionId, projectPath));
-        });
     }
 
     private void registerInstance() {

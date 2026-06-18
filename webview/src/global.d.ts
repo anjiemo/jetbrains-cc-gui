@@ -58,9 +58,11 @@ interface Window {
   onExportSessionData?: (json: string) => void;
 
   /**
-   * Clear all messages
+   * Clear all messages. The optional barrier sequence (the backend coalescer's
+   * post-reset updateSequence) advances __minAcceptedUpdateSequence so stale
+   * in-flight updateMessages from the previous session are rejected.
    */
-  clearMessages?: () => void;
+  clearMessages?: (barrierSequence?: string | number) => void;
 
   /**
    * Add error message
