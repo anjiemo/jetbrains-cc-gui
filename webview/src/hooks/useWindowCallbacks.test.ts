@@ -1246,7 +1246,7 @@ describe('useWindowCallbacks integration', () => {
       });
     });
 
-    it('onBlockReset clears streaming refs to prevent cross-turn content merging', () => {
+    it('onBlockReset keeps streaming refs cumulative across turns (single assistant message)', () => {
       stubSynchronousTimers();
 
       const opts = createOptions();
@@ -1256,33 +1256,33 @@ describe('useWindowCallbacks integration', () => {
       act(() => { window.onStreamStart!(); });
       expect(opts.isStreamingRef.current).toBe(true);
 
-      // Simulate first turn's thinking delta
+      // Simulate first turn's thinking + content deltas
       act(() => { window.onThinkingDelta!('Turn1Thinking'); });
-      expect(opts.streamingThinkingRef.current).toBe('Turn1Thinking');
-
-      // Simulate first turn's content delta
       act(() => { window.onContentDelta!('Turn1Content'); });
-      expect(opts.streamingContentRef.current).toBe('Turn1Content');
 
-      // Block reset signal arrives (new assistant message in stream)
+      // Block reset signal arrives (a new assistant turn within the same
+      // stream). The Java layer keeps ONE assistant message for the whole
+      // turn and appends each turn's text/thinking as additional raw blocks,
+      // so the frontend must keep accumulating to preserve the prefix earlier
+      // turns contributed. Clearing here would break prefix reconciliation.
       act(() => { window.onBlockReset!(); });
 
-      // Streaming refs should be cleared
-      expect(opts.streamingThinkingRef.current).toBe('');
-      expect(opts.streamingContentRef.current).toBe('');
-
-      // But streaming should still be active
+      // Refs are intentionally retained, NOT cleared.
+      expect(opts.streamingThinkingRef.current).toBe('Turn1Thinking');
+      expect(opts.streamingContentRef.current).toBe('Turn1Content');
       expect(opts.isStreamingRef.current).toBe(true);
 
-      // Second turn's deltas arrive - should NOT merge with first turn
+      // Second turn's deltas append to the cumulative buffer.
       act(() => { window.onThinkingDelta!('Turn2Thinking'); });
-      expect(opts.streamingThinkingRef.current).toBe('Turn2Thinking');
+      expect(opts.streamingThinkingRef.current).toBe('Turn1ThinkingTurn2Thinking');
 
       act(() => { window.onContentDelta!('Turn2Content'); });
-      expect(opts.streamingContentRef.current).toBe('Turn2Content');
+      expect(opts.streamingContentRef.current).toBe('Turn1ContentTurn2Content');
 
-      // If onBlockReset was NOT called, we would have "Turn1ThinkingTurn2Thinking"
-      // and "Turn1ContentTurn2Content" (merged content)
+      // Cross-turn separation is enforced downstream by the sync functions'
+      // trailing-block guard (see useStreamingMessages.test.ts: "does not
+      // overwrite a finalized thinking block when the new turn's own block has
+      // not arrived yet"), NOT by clearing the buffers here.
     });
 
     it('onBlockReset is ignored when stream is not active', () => {

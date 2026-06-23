@@ -728,13 +728,18 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
       // Stream not active, ignore (could be stale signal after stream ended)
       return;
     }
-    // Clear content buffers - new deltas will start fresh
-    streamingContentRef.current = '';
-    streamingThinkingRef.current = '';
-    // Intentionally NOT resetting streamingMessageIndexRef here: the backend will
-    // send a new updateMessages snapshot for this turn, which will eventually set
-    // the correct index via the isStaleSnapshot guard. Resetting the index now
-    // would leave a window where incoming deltas have nowhere to land.
+    // NOTE: content/thinking buffers are intentionally NOT cleared here.
+    // The Java layer keeps ONE assistant message for the whole turn (including
+    // every tool_use loop iteration), appending each turn's text/thinking as
+    // additional raw blocks. Clearing the buffers on BLOCK_RESET would discard
+    // the prefix carried by earlier turns and break sync*BlocksWithContent's
+    // prefix reconciliation: a multi-block turn would drop new deltas (prefix
+    // no longer matches) and a single-block turn would overwrite the prior
+    // turn's block with the new turn's content. Keep the cumulative buffer; the
+    // sync functions' trailing-block guard routes each turn's content into its
+    // own block once the backend snapshot delivers it.
+    // Intentionally NOT resetting streamingMessageIndexRef either: the assistant
+    // message is shared across turns, so the index already points at it.
     // Reset throttle timeouts to ensure clean state for new deltas
     if (contentUpdateTimeoutRef.current != null) {
       cancelAnimationFrame(contentUpdateTimeoutRef.current);

@@ -387,6 +387,123 @@ describe('useStreamingMessages', () => {
     expect(rawContent[0]).toMatchObject({ thinking: 'Original first' });
     expect(rawContent[2]).toMatchObject({ thinking: 'Original second' });
   });
+
+  it('does not overwrite a finalized thinking block when the new turn block has not arrived yet', () => {
+    // Problem 2 (regression): Turn 1 ended with a tool_use so its thinking
+    // block is finalized. Turn 2's thinking delta arrives BEFORE the backend
+    // snapshot appended Turn 2's own block. streamingThinkingRef now carries
+    // both turns (onBlockReset no longer clears it). The sync function must
+    // leave Turn 1's block untouched and wait for updateMessages — NOT leak
+    // Turn 2's content into Turn 1's block.
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingThinkingRef.current = 'Turn1ThinkingTurn2Thinking';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'Turn1Thinking', text: 'Turn1Thinking' },
+            { type: 'text', text: 'Turn1Content' },
+            { type: 'tool_use', id: 'bash-1', name: 'run', input: {} },
+          ],
+        },
+      },
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    const rawContent = (patched.raw as any).message.content as ContentBlockTest[];
+
+    // Turn 1's thinking block preserved (NOT overwritten with the cumulative buffer).
+    expect(rawContent[0]).toMatchObject({ type: 'thinking', thinking: 'Turn1Thinking' });
+    // Structure unchanged — no premature Turn 2 block fabricated from the buffer.
+    expect(rawContent.map((b) => b.type)).toEqual(['thinking', 'text', 'tool_use']);
+  });
+
+  it('streams the new turn thinking into its own trailing block once the backend delivers it', () => {
+    // Problem 1 (regression): same cumulative buffer, but the backend snapshot
+    // HAS appended Turn 2's thinking block at the tail. Prefix reconciliation
+    // must assign only the Turn 2 suffix to that trailing block, restoring
+    // live streaming instead of dropping every Turn 2 delta.
+    const { result } = renderHook(() => useStreamingMessages());
+
+    result.current.streamingThinkingRef.current = 'Turn1ThinkingTurn2Thinking';
+
+    const assistant: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'Turn1Thinking', text: 'Turn1Thinking' },
+            { type: 'tool_use', id: 'bash-1', name: 'run', input: {} },
+            { type: 'thinking', thinking: '', text: '' },
+          ],
+        },
+      },
+    };
+
+    const patched = result.current.patchAssistantForStreaming(assistant);
+    const rawContent = (patched.raw as any).message.content as ContentBlockTest[];
+
+    expect(rawContent).toHaveLength(3);
+    expect(rawContent[0]).toMatchObject({ type: 'thinking', thinking: 'Turn1Thinking' });
+    expect(rawContent[1]).toMatchObject({ type: 'tool_use', id: 'bash-1' });
+    // Turn 2's block receives exactly its suffix — streaming resumed.
+    expect(rawContent[2]).toMatchObject({ type: 'thinking', thinking: 'Turn2Thinking' });
+  });
+
+  it('cross-turn thinking: waits patiently, then streams as the turn 2 block grows', () => {
+    // End-to-end pacing for both regressions together.
+    const { result } = renderHook(() => useStreamingMessages());
+
+    // Turn 2's first delta arrives before its block exists in the snapshot.
+    result.current.streamingThinkingRef.current = 'Turn1ThinkingTurn2a';
+    const beforeTurn2Block: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'Turn1Thinking', text: 'Turn1Thinking' },
+            { type: 'tool_use', id: 'bash-1', name: 'run', input: {} },
+          ],
+        },
+      },
+    };
+    const patchedBefore = result.current.patchAssistantForStreaming(beforeTurn2Block);
+    expect((patchedBefore.raw as any).message.content[0]).toMatchObject({ thinking: 'Turn1Thinking' });
+    expect((patchedBefore.raw as any).message.content.map((b: ContentBlockTest) => b.type))
+      .toEqual(['thinking', 'tool_use']);
+
+    // A second Turn 2 delta arrives; ref keeps accumulating across the turn.
+    result.current.streamingThinkingRef.current = 'Turn1ThinkingTurn2ab';
+    const withTurn2Block: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      isStreaming: true,
+      raw: {
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'Turn1Thinking', text: 'Turn1Thinking' },
+            { type: 'tool_use', id: 'bash-1', name: 'run', input: {} },
+            { type: 'thinking', thinking: 'Turn2a', text: 'Turn2a' },
+          ],
+        },
+      },
+    };
+    const patchedAfter = result.current.patchAssistantForStreaming(withTurn2Block);
+    const rawAfter = (patchedAfter.raw as any).message.content as ContentBlockTest[];
+    expect(rawAfter).toHaveLength(3);
+    expect(rawAfter[0]).toMatchObject({ thinking: 'Turn1Thinking' });
+    // Turn 2 block now streams the latest suffix live.
+    expect(rawAfter[2]).toMatchObject({ thinking: 'Turn2ab' });
+  });
 });
 
 interface ContentBlockTest {
