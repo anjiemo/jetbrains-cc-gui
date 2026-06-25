@@ -316,13 +316,14 @@ export function useDialogManagement({ t }: UseDialogManagementOptions): UseDialo
   // response back to the backend (it has already written one); doing so would
   // race with the safety-net's empty answer / DENY. The refs are reset
   // synchronously so a new request arriving in the same tick is not silently
-  // enqueued behind the now-orphaned dialog. Stale entries for the same id are
-  // dropped from the pending queue so they cannot re-open after timeout.
+  // enqueued behind the now-orphaned dialog. Pending-queue entries for the
+  // targeted id (or the entire queue when no id is given) are dropped so a
+  // stale request cannot re-open after the dialog is force-closed.
   const forceCloseAskUserQuestionDialog = useCallback((requestId?: string | null) => {
     const targetId = requestId && requestId.length > 0 ? requestId : null;
-    pendingAskUserQuestionRequestsRef.current = pendingAskUserQuestionRequestsRef.current.filter(
-      (item) => targetId === null || item.requestId !== targetId
-    );
+    pendingAskUserQuestionRequestsRef.current = targetId === null
+      ? []
+      : pendingAskUserQuestionRequestsRef.current.filter((item) => item.requestId !== targetId);
     // If the targeted ID doesn't match the active dialog, the item was only in
     // the queue (now pruned above) — don't close an unrelated active dialog.
     if (targetId !== null && currentAskUserQuestionRequestRef.current?.requestId !== targetId) {
@@ -336,9 +337,9 @@ export function useDialogManagement({ t }: UseDialogManagementOptions): UseDialo
 
   const forceClosePermissionDialog = useCallback((channelId?: string | null) => {
     const targetId = channelId && channelId.length > 0 ? channelId : null;
-    pendingPermissionRequestsRef.current = pendingPermissionRequestsRef.current.filter(
-      (item) => targetId === null || item.channelId !== targetId
-    );
+    pendingPermissionRequestsRef.current = targetId === null
+      ? []
+      : pendingPermissionRequestsRef.current.filter((item) => item.channelId !== targetId);
     if (targetId !== null && currentPermissionRequestRef.current?.channelId !== targetId) {
       return;
     }
@@ -350,9 +351,9 @@ export function useDialogManagement({ t }: UseDialogManagementOptions): UseDialo
 
   const forceClosePlanApprovalDialog = useCallback((requestId?: string | null) => {
     const targetId = requestId && requestId.length > 0 ? requestId : null;
-    pendingPlanApprovalRequestsRef.current = pendingPlanApprovalRequestsRef.current.filter(
-      (item) => targetId === null || item.requestId !== targetId
-    );
+    pendingPlanApprovalRequestsRef.current = targetId === null
+      ? []
+      : pendingPlanApprovalRequestsRef.current.filter((item) => item.requestId !== targetId);
     if (targetId !== null && currentPlanApprovalRequestRef.current?.requestId !== targetId) {
       return;
     }

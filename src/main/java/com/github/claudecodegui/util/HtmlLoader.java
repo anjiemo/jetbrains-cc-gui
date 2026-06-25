@@ -104,12 +104,10 @@ public class HtmlLoader {
      * provider that ClaudeChatWindow.restorePersistedTabSessionState already
      * applied to the session — see issue #1353.
      *
-     * Both arguments may be null/empty. Empty strings are still injected as
-     * empty so the frontend can distinguish "explicitly cleared by backend"
-     * (use empty string, fall back to localStorage) from "backend never said
-     * anything" (variable absent, use localStorage). The frontend treats
-     * empty strings as "no preference"; only non-empty values override
-     * localStorage.
+     * Both arguments may be null/empty. Null/empty values are injected as
+     * empty strings; the frontend treats an empty string as "no backend
+     * preference" and falls back to localStorage. Only non-empty values
+     * override the global localStorage snapshot.
      */
     public String injectInitialTabState(String html, String provider, String model) {
         try {
@@ -141,7 +139,9 @@ public class HtmlLoader {
                 .replace("\n", "\\n")
                 .replace("\r", "\\r")
                 .replace("<", "\\u003c")
-                .replace(">", "\\u003e");
+                .replace(">", "\\u003e")
+                .replace("\u2028", "\\u2028")   // Line separator — string-literal break in pre-ES2019 JS engines
+                .replace("\u2029", "\\u2029");  // Paragraph separator — same risk
     }
 
     /**
