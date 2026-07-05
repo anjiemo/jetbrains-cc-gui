@@ -233,7 +233,6 @@ export function buildWebviewControlledSettingsOverride(modelId) {
  *
  * @returns {boolean} true unless a cloud provider switch is active in settings.
  */
-
 function shouldHostManageProvider() {
   if (getClaudeRuntimeState().access === 'cli_login') {
     return false;
@@ -241,7 +240,6 @@ function shouldHostManageProvider() {
   const settings = loadClaudeSettings();
   return !CLOUD_PROVIDER_FLAGS.some((flag) => isEnvFlagEnabled(settings?.env?.[flag]));
 }
-
 
 /**
  * Build a clean env object for SDK child processes that identifies as CLI.
