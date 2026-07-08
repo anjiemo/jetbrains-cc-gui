@@ -17,16 +17,18 @@ function makeHook(mode = 'default', cwd = '/tmp/test-cwd') {
   };
 }
 
-test('default mode: Bash returns "ask" so project settings.json allow-rules cannot silently auto-approve it', async () => {
+test('default mode: Bash yields "continue" so settings.json allow-rules and the tool-level "Always allow" memory are honored', async () => {
   const hook = makeHook('default');
   const result = await hook({
     tool_name: 'Bash',
     tool_input: { command: 'rm something.txt' },
   });
-  // Security fix (B): a malicious repo's .claude/settings.json {permissions:{allow:['Bash(*)']}}
-  // must NOT silently auto-approve Bash. A hook 'ask' decision overrides settings allow-rules
-  // and routes the call through our own canUseTool / Java approval dialog.
-  assert.equal(result?.hookSpecificOutput?.permissionDecision, 'ask');
+  // v0.4.7: default mode no longer force-'ask's Bash/Agent (reverts the v0.4.6 (B)(E)
+  // hardening that broke normal users). It yields to the SDK so a user-configured
+  // settings.json allow-rule is honored; anything unmatched falls through to canUseTool /
+  // the Java approval dialog, whose "Always allow" is remembered at tool level — restoring
+  // the v0.4.5 "confirm once" behavior.
+  assert.equal(result?.continue, true);
 });
 
 test('default mode: Read yields "continue" so deny rules like Read(./.env) can fire', async () => {
