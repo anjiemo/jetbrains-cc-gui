@@ -1,8 +1,10 @@
 import { type RefObject, useCallback, useMemo, useRef } from 'react';
 import type { TFunction } from 'i18next';
 import type {
+  ClaudeContentBlock,
   ClaudeMessage,
   ClaudeRawMessage,
+  TodoItem,
   ToolResultBlock,
 } from '../types';
 import type { GetToolResultRawFn } from '../contexts/SubagentContext';
@@ -36,6 +38,33 @@ interface UseChatComputationsParams {
   currentSessionIdRef: RefObject<string | null>;
   getMessageText: ReturnType<typeof useMessageProcessing>['getMessageText'];
   getContentBlocks: ReturnType<typeof useMessageProcessing>['getContentBlocks'];
+}
+
+export function deriveTodosForTurn(
+  turnMessages: ClaudeMessage[],
+  getContentBlocks: (message: ClaudeMessage) => ClaudeContentBlock[],
+  streamingActive: boolean,
+): TodoItem[] {
+  let latestTodos: ReturnType<typeof extractTodosFromToolUse> = null;
+  for (let i = turnMessages.length - 1; i >= 0; i--) {
+    const msg = turnMessages[i];
+    if (msg.type !== 'assistant') continue;
+    const blocks = getContentBlocks(msg);
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const todos = extractTodosFromToolUse(blocks[j]);
+      if (todos && todos.length > 0) {
+        latestTodos = todos;
+        break;
+      }
+    }
+    if (latestTodos) break;
+  }
+
+  if (latestTodos) {
+    return finalizeTodosForSettledTurn(latestTodos, streamingActive);
+  }
+
+  return extractAccumulatedTasks(turnMessages, getContentBlocks);
 }
 
 /**
@@ -129,29 +158,8 @@ export function useChatComputations({
   );
 
   const globalTodos = useMemo(() => {
-    let latestTodos: ReturnType<typeof extractTodosFromToolUse> = null;
-    for (let i = latestTurnMessages.length - 1; i >= 0; i--) {
-      const msg = latestTurnMessages[i];
-      if (msg.type !== 'assistant') continue;
-      const blocks = getContentBlocks(msg);
-      for (let j = blocks.length - 1; j >= 0; j--) {
-        const todos = extractTodosFromToolUse(blocks[j]);
-        if (todos && todos.length > 0) {
-          latestTodos = todos;
-          break;
-        }
-      }
-      if (latestTodos) break;
-    }
-    if (latestTodos) {
-      return finalizeTodosForSettledTurn(latestTodos, streamingActive);
-    }
-    const accumulated = extractAccumulatedTasks(messages, getContentBlocks);
-    if (accumulated.length > 0) {
-      return accumulated;
-    }
-    return [];
-  }, [latestTurnMessages, messages, getContentBlocks, streamingActive]);
+    return deriveTodosForTurn(latestTurnMessages, getContentBlocks, streamingActive);
+  }, [latestTurnMessages, getContentBlocks, streamingActive]);
 
   const canRewindFromMessageIndex = useCallback(
     (userMessageIndex: number) => {
