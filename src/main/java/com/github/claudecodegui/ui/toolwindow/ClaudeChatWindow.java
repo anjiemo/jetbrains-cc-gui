@@ -21,7 +21,6 @@ import com.github.claudecodegui.ui.EditorContextTracker;
 import com.github.claudecodegui.ui.WebviewInitializer;
 import com.github.claudecodegui.ui.WebviewWatchdog;
 import com.github.claudecodegui.util.HtmlLoader;
-import com.github.claudecodegui.util.JBCefBrowserFactory;
 import com.github.claudecodegui.util.JsUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -503,10 +502,6 @@ public class ClaudeChatWindow {
             }
             try {
                 org.cef.browser.CefBrowser cefBrowser = targetBrowser.getCefBrowser();
-                if (JBCefBrowserFactory.isBrowserClosed(cefBrowser)) {
-                    LOG.debug("Skip raw JS execution: webview already closed");
-                    return;
-                }
                 cefBrowser.executeJavaScript(jsCode, cefBrowser.getURL(), 0);
             } catch (Exception | LinkageError e) {
                 LOG.warn("Failed to execute raw JS code: " + e.getMessage(), e);
@@ -538,10 +533,6 @@ public class ClaudeChatWindow {
             }
             try {
                 org.cef.browser.CefBrowser cefBrowser = targetBrowser.getCefBrowser();
-                if (JBCefBrowserFactory.isBrowserClosed(cefBrowser)) {
-                    LOG.debug("Skip JS call " + functionName + ": webview already closed");
-                    return;
-                }
                 String callee = functionName;
                 if (!functionName.contains(".")) {
                     callee = "window." + functionName;
@@ -1007,11 +998,8 @@ public class ClaudeChatWindow {
         if (this.disposed || targetBrowser == null) {
             return;
         }
-        org.cef.browser.CefBrowser cefBrowser;
         try {
-            cefBrowser = targetBrowser.getCefBrowser();
-            if (JBCefBrowserFactory.isBrowserClosed(cefBrowser) || this.browser != targetBrowser) {
-                LOG.debug("Skip focus input pane: webview already closed");
+            if (this.browser != targetBrowser) {
                 return;
             }
             targetBrowser.getComponent().requestFocus();
@@ -1182,6 +1170,11 @@ public class ClaudeChatWindow {
             @Override
             public WebviewWatchdog getWebviewWatchdog() {
                 return webviewWatchdog;
+            }
+
+            @Override
+            public boolean isFrontendReady() {
+                return frontendReady;
             }
 
             @Override
