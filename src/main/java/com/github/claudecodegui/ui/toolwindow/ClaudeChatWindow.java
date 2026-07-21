@@ -21,6 +21,7 @@ import com.github.claudecodegui.ui.EditorContextTracker;
 import com.github.claudecodegui.ui.WebviewInitializer;
 import com.github.claudecodegui.ui.WebviewWatchdog;
 import com.github.claudecodegui.util.HtmlLoader;
+import com.github.claudecodegui.util.JBCefBrowserFactory;
 import com.github.claudecodegui.util.JsUtils;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -62,7 +63,7 @@ public class ClaudeChatWindow {
     // the bridges actually route permission requests to.
     private String permissionServiceKey = null;
 
-    private JBCefBrowser browser;
+    private volatile JBCefBrowser browser;
     // volatile: read from the daemon reader thread by the session_updated listener
     // and its loadFromServer continuation, while reassigned on the EDT.
     private volatile ClaudeSession session;
@@ -492,12 +493,23 @@ public class ClaudeChatWindow {
     }
 
     public void executeJavaScriptCode(String jsCode) {
-        if (this.disposed || this.browser == null) {
+        JBCefBrowser targetBrowser = this.browser;
+        if (this.disposed || targetBrowser == null) {
             return;
         }
         ApplicationManager.getApplication().invokeLater(() -> {
-            if (!this.disposed && this.browser != null) {
-                this.browser.getCefBrowser().executeJavaScript(jsCode, this.browser.getCefBrowser().getURL(), 0);
+            if (this.disposed || this.browser != targetBrowser) {
+                return;
+            }
+            try {
+                org.cef.browser.CefBrowser cefBrowser = targetBrowser.getCefBrowser();
+                if (JBCefBrowserFactory.isBrowserClosed(cefBrowser)) {
+                    LOG.debug("Skip raw JS execution: webview already closed");
+                    return;
+                }
+                cefBrowser.executeJavaScript(jsCode, cefBrowser.getURL(), 0);
+            } catch (Exception | LinkageError e) {
+                LOG.warn("Failed to execute raw JS code: " + e.getMessage(), e);
             }
         });
     }
@@ -508,8 +520,10 @@ public class ClaudeChatWindow {
             java.util.regex.Pattern.compile("^[a-zA-Z_$][a-zA-Z0-9_$.]*$");
 
     void callJavaScript(String functionName, String... args) {
-        if (disposed || browser == null) {
-            LOG.warn("Cannot call JS function " + functionName + ": disposed=" + disposed + ", browser=" + (browser == null ? "null" : "exists"));
+        JBCefBrowser targetBrowser = this.browser;
+        if (this.disposed || targetBrowser == null) {
+            LOG.warn("Cannot call JS function " + functionName + ": disposed=" + this.disposed
+                    + ", browser=" + (targetBrowser == null ? "null" : "exists"));
             return;
         }
 
@@ -519,10 +533,15 @@ public class ClaudeChatWindow {
         }
 
         ApplicationManager.getApplication().invokeLater(() -> {
-            if (disposed || browser == null) {
+            if (this.disposed || this.browser != targetBrowser) {
                 return;
             }
             try {
+                org.cef.browser.CefBrowser cefBrowser = targetBrowser.getCefBrowser();
+                if (JBCefBrowserFactory.isBrowserClosed(cefBrowser)) {
+                    LOG.debug("Skip JS call " + functionName + ": webview already closed");
+                    return;
+                }
                 String callee = functionName;
                 if (!functionName.contains(".")) {
                     callee = "window." + functionName;
@@ -548,14 +567,17 @@ public class ClaudeChatWindow {
                                 "  }" +
                                 "})();";
 
-                browser.getCefBrowser().executeJavaScript(checkAndCall, browser.getCefBrowser().getURL(), 0);
-            } catch (Exception e) {
+                cefBrowser.executeJavaScript(checkAndCall, cefBrowser.getURL(), 0);
+            } catch (Exception | LinkageError e) {
                 LOG.warn("Failed to call JS function: " + functionName + ", error: " + e.getMessage(), e);
             }
         });
     }
 
-    void handleJavaScriptMessage(String message) {
+    synchronized void handleJavaScriptMessage(String message) {
+        if (this.disposed || message == null) {
+            return;
+        }
         if (message.startsWith("{\"type\":\"console.")) {
             try {
                 JsonObject json = new Gson().fromJson(message, JsonObject.class);
@@ -981,10 +1003,22 @@ public class ClaudeChatWindow {
      * Called when Ctrl+Alt+K activates the panel without a selection.
      */
     public void focusInputPane() {
-        if (disposed || browser == null) {
+        JBCefBrowser targetBrowser = this.browser;
+        if (this.disposed || targetBrowser == null) {
             return;
         }
-        browser.getComponent().requestFocus();
+        org.cef.browser.CefBrowser cefBrowser;
+        try {
+            cefBrowser = targetBrowser.getCefBrowser();
+            if (JBCefBrowserFactory.isBrowserClosed(cefBrowser) || this.browser != targetBrowser) {
+                LOG.debug("Skip focus input pane: webview already closed");
+                return;
+            }
+            targetBrowser.getComponent().requestFocus();
+        } catch (Exception | LinkageError e) {
+            LOG.debug("Skip focus input pane: webview is unavailable", e);
+            return;
+        }
         executeJavaScriptCode("window.focusChatInput?.()");
     }
 
@@ -993,6 +1027,21 @@ public class ClaudeChatWindow {
     public synchronized void dispose() {
         if (this.disposed) { return; }
         this.disposed = true;
+        JBCefBrowser targetBrowser = this.browser;
+        this.browser = null;
+        if (this.handlerContext != null) {
+            this.handlerContext.setDisposed(true);
+            this.handlerContext.setBrowser(null);
+        }
+        webviewWatchdog.stop();
+
+        try {
+            if (this.webviewInitializer != null) {
+                this.webviewInitializer.disposeBridges();
+            }
+        } catch (Exception | LinkageError e) {
+            LOG.warn("Failed to dispose webview bridges: " + e.getMessage(), e);
+        }
 
         chatWindowDelegate.dispose();
         editorContextTracker.dispose();
@@ -1008,7 +1057,6 @@ public class ClaudeChatWindow {
             }
             titleEventListener = null;
         }
-        webviewWatchdog.stop();
 
         try {
             if (this.permissionServiceKey != null && !this.permissionServiceKey.isEmpty()) {
@@ -1024,8 +1072,6 @@ public class ClaudeChatWindow {
         }
 
         LOG.info("Starting window resource cleanup, project: " + project.getName());
-
-        handlerContext.setDisposed(true);
 
         if (parentContent != null) {
             ClaudeSDKToolWindow.unregisterContentMapping(parentContent);
@@ -1065,12 +1111,11 @@ public class ClaudeChatWindow {
         }
 
         try {
-            if (browser != null) {
-                browser.dispose();
-                browser = null;
+            if (targetBrowser != null) {
+                targetBrowser.dispose();
             }
-        } catch (Exception e) {
-            LOG.warn("Failed to clean up browser: " + e.getMessage());
+        } catch (Exception | LinkageError e) {
+            LOG.warn("Failed to clean up browser: " + e.getMessage(), e);
         }
 
         if (messageDispatcher != null) {

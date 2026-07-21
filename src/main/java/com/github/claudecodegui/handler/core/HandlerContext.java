@@ -4,6 +4,7 @@ import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.github.claudecodegui.util.JBCefBrowserFactory;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.jcef.JBCefBrowser;
@@ -139,12 +140,29 @@ public class HandlerContext {
      * Execute JavaScript on the EDT (Event Dispatch Thread).
      */
     public void executeJavaScriptOnEDT(String jsCode) {
-        if (browser != null && !disposed) {
-            ApplicationManager.getApplication().invokeLater(() -> {
-                if (browser != null && !disposed) {
-                    browser.getCefBrowser().executeJavaScript(jsCode, browser.getCefBrowser().getURL(), 0);
-                }
-            });
+        JBCefBrowser targetBrowser = this.browser;
+        if (targetBrowser == null || this.disposed) {
+            return;
         }
+        try {
+            if (JBCefBrowserFactory.isBrowserClosed(targetBrowser.getCefBrowser())) {
+                return;
+            }
+        } catch (Exception | LinkageError ignored) {
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (this.disposed || this.browser != targetBrowser) {
+                return;
+            }
+            try {
+                if (!JBCefBrowserFactory.isBrowserClosed(targetBrowser.getCefBrowser())) {
+                    targetBrowser.getCefBrowser().executeJavaScript(
+                            jsCode, targetBrowser.getCefBrowser().getURL(), 0);
+                }
+            } catch (Exception | LinkageError ignored) {
+                // The webview may be disposed between the generation check and execution.
+            }
+        });
     }
 }
