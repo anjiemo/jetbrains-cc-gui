@@ -72,6 +72,15 @@ public class WebviewInitializer {
 
     private final WebviewHost host;
 
+    private final Object bridgeLock = new Object();
+
+    /**
+     * JCEF JS bridges for the current browser. Keeping each browser's queries
+     * together prevents a stale load callback from using a replacement browser's
+     * native callback handles during a watchdog recreation.
+     */
+    private volatile BrowserBridges bridges;
+
     public WebviewInitializer(WebviewHost host) {
         this.host = host;
     }
@@ -80,7 +89,24 @@ public class WebviewInitializer {
      * Create and configure UI components (browser, JS bridge, drag-and-drop).
      */
     public void createUIComponents() {
+        if (this.host.isDisposed()) {
+            return;
+        }
+        JBCefBrowser existingBrowser = this.host.getBrowser();
+        if (existingBrowser != null) {
+            try {
+                if (!JBCefBrowserFactory.isBrowserClosed(existingBrowser.getCefBrowser())) {
+                    LOG.debug("Skip duplicate webview initialization: browser is already active");
+                    return;
+                }
+            } catch (Exception | LinkageError ignored) {
+                // The stale browser is cleaned up below before a replacement is created.
+            }
+            this.disposeFailedBrowser(existingBrowser);
+        }
+
         JPanel mainPanel = host.getMainPanel();
+        JBCefBrowser browser = null;
 
         // Use the shared resolver from BridgePreloader for consistent state
         com.github.claudecodegui.bridge.BridgeDirectoryResolver sharedResolver = BridgePreloader.getSharedResolver();
@@ -177,65 +203,89 @@ public class WebviewInitializer {
         }
 
         try {
-            JBCefBrowser browser = JBCefBrowserFactory.create();
-            host.setBrowser(browser);
-            host.getHandlerContext().setBrowser(browser);
+            browser = JBCefBrowserFactory.create();
+            JBCefBrowser createdBrowser = browser;
+            host.setBrowser(createdBrowser);
+            host.getHandlerContext().setBrowser(createdBrowser);
 
-            browser.getJBCefClient().addRequestHandler(
+            createdBrowser.getJBCefClient().addRequestHandler(
                     new UiFontResourceRequestHandler(),
-                    browser.getCefBrowser()
+                    createdBrowser.getCefBrowser()
             );
 
-            JBCefBrowserBase browserBase = browser;
-            JBCefJSQuery jsQuery = JBCefJSQuery.create(browserBase);
-            jsQuery.addHandler((msg) -> {
-                host.handleJavaScriptMessage(msg);
-                return new JBCefJSQuery.Response("ok");
+            // JCEF JS bridges must be created and registered before loadHTML,
+            // because the window.sendToJava / shortcut / clipboard handlers
+            // injected in onLoadEnd depend on these JSQuery inject() handles.
+            BrowserBridges currentBridges = new BrowserBridges(createdBrowser);
+            synchronized (this.bridgeLock) {
+                this.bridges = currentBridges;
+            }
+            currentBridges.jsQuery.addHandler((msg) -> {
+                boolean dispatch;
+                synchronized (this.bridgeLock) {
+                    dispatch = !host.isDisposed() && this.bridges == currentBridges
+                            && currentBridges.isCurrentFor(createdBrowser);
+                }
+                // Dispatch outside bridgeLock: handleJavaScriptMessage is
+                // synchronized on the host window, and dispose() holds that
+                // same monitor while calling disposeBridges(). Nesting
+                // bridgeLock -> host monitor would invert dispose()'s
+                // host-monitor -> bridgeLock order and deadlock the EDT
+                // against the JCEF dispatch thread. dispose() flips the
+                // disposed flag before disposeBridges(), so a teardown that
+                // races this gap is still caught by handleJavaScriptMessage's
+                // own disposed guard.
+                if (dispatch) {
+                    host.handleJavaScriptMessage(msg);
+                }
+                return new JBCefJSQuery.Response(dispatch ? "ok" : "closed");
             });
 
-            // Create a dedicated JSQuery for getting clipboard file paths
-            JBCefJSQuery getClipboardPathQuery = JBCefJSQuery.create(browserBase);
-            getClipboardPathQuery.addHandler((msg) -> {
-                try {
-                    LOG.debug("Clipboard path request received");
-                    Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-                    Transferable contents = clipboard.getContents(null);
-
-                    if (contents != null && contents.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
-                        @SuppressWarnings("unchecked")
-                        List<File> files = (List<File>) contents.getTransferData(DataFlavor.javaFileListFlavor);
-
-                        if (!files.isEmpty()) {
-                            File file = files.get(0);
-                            String filePath = file.getAbsolutePath();
-                            LOG.debug("Returning file path from clipboard: " + filePath);
-                            return new JBCefJSQuery.Response(filePath);
-                        }
+            currentBridges.clipboardPathQuery.addHandler((msg) -> {
+                synchronized (this.bridgeLock) {
+                    if (host.isDisposed() || this.bridges != currentBridges
+                            || !currentBridges.isCurrentFor(createdBrowser)) {
+                        return new JBCefJSQuery.Response("closed");
                     }
-                    LOG.debug("No file in clipboard");
-                    return new JBCefJSQuery.Response("");
-                } catch (Exception ex) {
-                    LOG.warn("Error getting clipboard path: " + ex.getMessage());
-                    return new JBCefJSQuery.Response("");
                 }
+                // Clipboard reads can stall on remote/slow clipboards (X11
+                // selection IPC). Keep them outside bridgeLock so the message
+                // dispatcher and sibling handlers are not blocked behind one
+                // slow paste. handleClipboardPathRequest is a pure read and
+                // never touches the browser or bridges, so racing a teardown
+                // here is harmless — the response is dropped if the browser is
+                // gone by the time it returns.
+                return handleClipboardPathRequest();
             });
 
             // Create a dedicated JSQuery for hiding the CCG panel via Shift+Esc
-            JBCefJSQuery hidePanelQuery = JBCefJSQuery.create(browserBase);
-            hidePanelQuery.addHandler((msg) -> {
-                try {
-                    Project project = host.getProject();
-                    if (project != null && !project.isDisposed()) {
-                        ApplicationManager.getApplication().invokeLater(() -> {
-                            ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow("CCG");
-                            if (toolWindow != null && toolWindow.isVisible()) {
-                                toolWindow.hide();
-                            }
-                        });
+            currentBridges.hidePanelQuery.addHandler((msg) -> {
+                synchronized (this.bridgeLock) {
+                    if (host.isDisposed() || this.bridges != currentBridges
+                            || !currentBridges.isCurrentFor(createdBrowser)) {
+                        return new JBCefJSQuery.Response("closed");
                     }
-                } catch (Exception ex) {
-                    LOG.warn("Failed to hide CCG panel via shortcut: " + ex.getMessage());
                 }
+                // Route through the project-aware invoker rather than
+                // ApplicationManager.invokeLater: getInstance(project) throws
+                // AlreadyDisposedException once the project closes, and the gap
+                // between the isDisposed() check above and the EDT callback is
+                // exactly when a project teardown can slip in. The helper uses
+                // ToolWindowManager.invokeLater, which drops the callback when
+                // the project is disposed.
+                invokeLaterForToolWindow(() -> {
+                    if (host.isDisposed()) {
+                        return;
+                    }
+                    Project project = host.getProject();
+                    if (project == null || project.isDisposed()) {
+                        return;
+                    }
+                    ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow("CCG");
+                    if (toolWindow != null && toolWindow.isVisible()) {
+                        toolWindow.hide();
+                    }
+                });
                 return new JBCefJSQuery.Response("ok");
             });
 
@@ -253,47 +303,61 @@ public class WebviewInitializer {
             String tabModel = session != null ? session.getModel() : null;
             htmlContent = htmlLoader.injectInitialTabState(htmlContent, tabProvider, tabModel);
 
-            browser.getJBCefClient().addLoadHandler(new CefLoadHandlerAdapter() {
+            // LoadHandler must be registered before loadHTML, otherwise the
+            // first frame's onLoadEnd is missed and the JS bridge injection
+            // never runs, leaving the frontend without a sendToJava channel.
+            createdBrowser.getJBCefClient().addLoadHandler(new CefLoadHandlerAdapter() {
                 @Override
                 public void onLoadEnd(CefBrowser cefBrowser, CefFrame frame, int httpStatusCode) {
                     LOG.debug("onLoadEnd called, isMain=" + frame.isMain() + ", url=" + cefBrowser.getURL());
 
-                    if (!frame.isMain()) {
+                    if (!frame.isMain() || host.isDisposed()) {
                         return;
                     }
 
-                    String injection = "window.sendToJava = function(msg) { " + jsQuery.inject("msg") + " };";
-                    cefBrowser.executeJavaScript(injection, cefBrowser.getURL(), 0);
+                    String injection;
+                    String shiftEscInjection;
+                    String clipboardPathInjection;
+                    synchronized (WebviewInitializer.this.bridgeLock) {
+                        if (WebviewInitializer.this.bridges != currentBridges
+                                || !currentBridges.isCurrentFor(createdBrowser)) {
+                            return;
+                        }
+                        injection = "window.sendToJava = function(msg) { "
+                                + currentBridges.jsQuery.inject("msg") + " };";
+                        shiftEscInjection =
+                            "document.addEventListener('keydown', function(e) {" +
+                            "  if (e.key === 'Escape' && e.shiftKey) {" +
+                            "    e.preventDefault();" +
+                            "    e.stopPropagation();" +
+                            "    " + currentBridges.hidePanelQuery.inject("''",
+                                "function() {}",
+                                "function() {}") +
+                            "  }" +
+                            "}, true);";
+                        clipboardPathInjection =
+                            "window.getClipboardFilePath = function() {" +
+                            "  return new Promise((resolve) => {" +
+                            "    " + currentBridges.clipboardPathQuery.inject("''",
+                                "function(response) { resolve(response); }",
+                                "function(error_code, error_message) { console.error('Failed to get clipboard path:', error_message); resolve(''); }") +
+                            "  });" +
+                            "};";
+                    }
 
-                    // Register Shift+Esc shortcut handler.
-                    // Intercepted at the JavaScript level — JCEF forwards keydown events
-                    // to the renderer before Chromium processes them for Task Manager.
-                    String shiftEscInjection =
-                        "document.addEventListener('keydown', function(e) {" +
-                        "  if (e.key === 'Escape' && e.shiftKey) {" +
-                        "    e.preventDefault();" +
-                        "    e.stopPropagation();" +
-                        "    " + hidePanelQuery.inject("''",
-                            "function() {}",
-                            "function() {}") +
-                        "  }" +
-                        "}, true);";
-                    cefBrowser.executeJavaScript(shiftEscInjection, cefBrowser.getURL(), 0);
+                    try {
+                        cefBrowser.executeJavaScript(injection, cefBrowser.getURL(), 0);
+                        cefBrowser.executeJavaScript(shiftEscInjection, cefBrowser.getURL(), 0);
+                        cefBrowser.executeJavaScript(clipboardPathInjection, cefBrowser.getURL(), 0);
+                    } catch (Exception | LinkageError e) {
+                        LOG.debug("Skipping webview bridge injection after browser disposal: " + e.getMessage(), e);
+                        return;
+                    }
 
-                    // Inject clipboard path retrieval function
-                    String clipboardPathInjection =
-                        "window.getClipboardFilePath = function() {" +
-                        "  return new Promise((resolve) => {" +
-                        "    " + getClipboardPathQuery.inject("''",
-                            "function(response) { resolve(response); }",
-                            "function(error_code, error_message) { console.error('Failed to get clipboard path:', error_message); resolve(''); }") +
-                        "  });" +
-                        "};";
-                    cefBrowser.executeJavaScript(clipboardPathInjection, cefBrowser.getURL(), 0);
-
-                    // Forward console logs to IDEA console (dev mode only — IPC overhead hurts scroll FPS in production)
-                    if (PlatformUtils.isPluginDevMode()) {
-                        String consoleForward =
+                    try {
+                        // Forward console logs to IDEA console (dev mode only — IPC overhead hurts scroll FPS in production)
+                        if (PlatformUtils.isPluginDevMode()) {
+                            String consoleForward =
                             "const originalLog = console.log;" +
                             "const originalError = console.error;" +
                             "const originalWarn = console.warn;" +
@@ -309,68 +373,70 @@ public class WebviewInitializer {
                             "  originalWarn.apply(console, args);" +
                             "  window.sendToJava(JSON.stringify({type: 'console.warn', args: args}));" +
                             "};";
-                        cefBrowser.executeJavaScript(consoleForward, cefBrowser.getURL(), 0);
+                            cefBrowser.executeJavaScript(consoleForward, cefBrowser.getURL(), 0);
+                        }
+
+                        // Pass IDEA editor font configuration to the frontend
+                        String fontConfig = FontConfigService.getEditorFontConfigJson();
+                        LOG.info("[FontSync] Retrieved font config: " + fontConfig);
+                        String fontConfigInjection = String.format(
+                            "if (window.applyIdeaFontConfig) { window.applyIdeaFontConfig(%s); } " +
+                            "else { window.__pendingFontConfig = %s; }",
+                            fontConfig, fontConfig
+                        );
+                        cefBrowser.executeJavaScript(fontConfigInjection, cefBrowser.getURL(), 0);
+                        LOG.info("[FontSync] Font config injected into frontend");
+
+                        // Pass effective plugin UI font configuration to the frontend
+                        String uiFontConfig = FontConfigService.getResolvedUiFontConfigJson(host.getHandlerContext().getSettingsService());
+                        LOG.info("[UiFontSync] Retrieved UI font config");
+                        String escapedUiFontConfig = JsUtils.escapeJs(uiFontConfig);
+                        String uiFontConfigInjection = String.format(
+                            "(function(){ var c = JSON.parse('%s'); " +
+                            "if (window.applyUiFontConfig) { window.applyUiFontConfig(c); } " +
+                            "else { window.__pendingUiFontConfig = c; } })()",
+                            escapedUiFontConfig
+                        );
+                        cefBrowser.executeJavaScript(uiFontConfigInjection, cefBrowser.getURL(), 0);
+                        LOG.info("[UiFontSync] UI font config injected into frontend");
+
+                        // Pass effective code font configuration to the frontend
+                        String codeFontConfig = FontConfigService.getResolvedCodeFontConfigJson(host.getHandlerContext().getSettingsService());
+                        LOG.info("[CodeFontSync] Retrieved code font config");
+                        String escapedCodeFontConfig = JsUtils.escapeJs(codeFontConfig);
+                        String codeFontConfigInjection = String.format(
+                            "(function(){ var c = JSON.parse('%s'); " +
+                            "if (window.applyCodeFontConfig) { window.applyCodeFontConfig(c); } " +
+                            "else { window.__pendingCodeFontConfig = c; } })()",
+                            escapedCodeFontConfig
+                        );
+                        cefBrowser.executeJavaScript(codeFontConfigInjection, cefBrowser.getURL(), 0);
+                        LOG.info("[CodeFontSync] Code font config injected into frontend");
+
+                        // Pass IDEA language configuration to the frontend
+                        String languageConfig = LanguageConfigService.getLanguageConfigJson(host.getHandlerContext().getSettingsService());
+                        LOG.info("[LanguageSync] Retrieved language config: " + languageConfig);
+                        String languageConfigInjection = String.format(
+                            "if (window.applyIdeaLanguageConfig) { window.applyIdeaLanguageConfig(%s); } " +
+                            "else { window.__pendingLanguageConfig = %s; }",
+                            languageConfig, languageConfig
+                        );
+                        cefBrowser.executeJavaScript(languageConfigInjection, cefBrowser.getURL(), 0);
+                        LOG.info("[LanguageSync] Language config injected into frontend");
+
+                        LOG.debug("onLoadEnd completed, waiting for frontend_ready signal");
+                    } catch (Exception | LinkageError e) {
+                        LOG.debug("Skipping webview initialization after browser disposal: " + e.getMessage(), e);
                     }
-
-                    // Pass IDEA editor font configuration to the frontend
-                    String fontConfig = FontConfigService.getEditorFontConfigJson();
-                    LOG.info("[FontSync] Retrieved font config: " + fontConfig);
-                    String fontConfigInjection = String.format(
-                        "if (window.applyIdeaFontConfig) { window.applyIdeaFontConfig(%s); } " +
-                        "else { window.__pendingFontConfig = %s; }",
-                        fontConfig, fontConfig
-                    );
-                    cefBrowser.executeJavaScript(fontConfigInjection, cefBrowser.getURL(), 0);
-                    LOG.info("[FontSync] Font config injected into frontend");
-
-                    // Pass effective plugin UI font configuration to the frontend
-                    String uiFontConfig = FontConfigService.getResolvedUiFontConfigJson(host.getHandlerContext().getSettingsService());
-                    LOG.info("[UiFontSync] Retrieved UI font config");
-                    String escapedUiFontConfig = JsUtils.escapeJs(uiFontConfig);
-                    String uiFontConfigInjection = String.format(
-                        "(function(){ var c = JSON.parse('%s'); " +
-                        "if (window.applyUiFontConfig) { window.applyUiFontConfig(c); } " +
-                        "else { window.__pendingUiFontConfig = c; } })()",
-                        escapedUiFontConfig
-                    );
-                    cefBrowser.executeJavaScript(uiFontConfigInjection, cefBrowser.getURL(), 0);
-                    LOG.info("[UiFontSync] UI font config injected into frontend");
-
-                    // Pass effective code font configuration to the frontend
-                    String codeFontConfig = FontConfigService.getResolvedCodeFontConfigJson(host.getHandlerContext().getSettingsService());
-                    LOG.info("[CodeFontSync] Retrieved code font config");
-                    String escapedCodeFontConfig = JsUtils.escapeJs(codeFontConfig);
-                    String codeFontConfigInjection = String.format(
-                        "(function(){ var c = JSON.parse('%s'); " +
-                        "if (window.applyCodeFontConfig) { window.applyCodeFontConfig(c); } " +
-                        "else { window.__pendingCodeFontConfig = c; } })()",
-                        escapedCodeFontConfig
-                    );
-                    cefBrowser.executeJavaScript(codeFontConfigInjection, cefBrowser.getURL(), 0);
-                    LOG.info("[CodeFontSync] Code font config injected into frontend");
-
-                    // Pass IDEA language configuration to the frontend
-                    String languageConfig = LanguageConfigService.getLanguageConfigJson(host.getHandlerContext().getSettingsService());
-                    LOG.info("[LanguageSync] Retrieved language config: " + languageConfig);
-                    String languageConfigInjection = String.format(
-                        "if (window.applyIdeaLanguageConfig) { window.applyIdeaLanguageConfig(%s); } " +
-                        "else { window.__pendingLanguageConfig = %s; }",
-                        languageConfig, languageConfig
-                    );
-                    cefBrowser.executeJavaScript(languageConfigInjection, cefBrowser.getURL(), 0);
-                    LOG.info("[LanguageSync] Language config injected into frontend");
-
-                    LOG.debug("onLoadEnd completed, waiting for frontend_ready signal");
                 }
-            }, browser.getCefBrowser());
+            }, createdBrowser.getCefBrowser());
 
-            browser.loadHTML(htmlContent);
+            // At this point the JSQuery bridges and the LoadHandler are both
+            // registered, so it is safe to load the HTML - the first frame's
+            // onLoadEnd will fire and inject the sendToJava bridge as expected.
+            createdBrowser.loadHTML(htmlContent);
 
-            // Reset webview health markers and start watchdog once the browser is created.
-            host.getWebviewWatchdog().resetTimestamps();
-            host.getWebviewWatchdog().start();
-
-            JComponent browserComponent = browser.getComponent();
+            JComponent browserComponent = createdBrowser.getComponent();
 
             // Set webview container background color to prevent white flash before HTML loads.
             browserComponent.setBackground(ThemeConfigService.getBackgroundColor());
@@ -399,7 +465,8 @@ public class WebviewInitializer {
                                     "if (window.handleFilePathFromJava) { window.handleFilePathFromJava(%s); }",
                                     jsonArray.toString()
                                 );
-                                browser.getCefBrowser().executeJavaScript(jsCode, browser.getCefBrowser().getURL(), 0);
+                                createdBrowser.getCefBrowser().executeJavaScript(
+                                        jsCode, createdBrowser.getCefBrowser().getURL(), 0);
                             }
                             dtde.dropComplete(true);
                             return;
@@ -412,8 +479,13 @@ public class WebviewInitializer {
             });
 
             mainPanel.add(browserComponent, BorderLayout.CENTER);
+            mainPanel.revalidate();
+            mainPanel.repaint();
+            host.getWebviewWatchdog().resetTimestamps();
+            host.getWebviewWatchdog().start();
 
         } catch (IllegalStateException e) {
+            this.disposeFailedBrowser(browser);
             if (e.getMessage() != null && e.getMessage().contains("JCEF")) {
                 LOG.error("JCEF initialization failed: " + e.getMessage(), e);
                 showJcefNotSupportedPanel();
@@ -422,6 +494,7 @@ public class WebviewInitializer {
                 showErrorPanel();
             }
         } catch (NullPointerException e) {
+            this.disposeFailedBrowser(browser);
             String msg = e.getMessage();
             if (msg != null && msg.contains("isNull") && msg.contains("robj")) {
                 LOG.error("JCEF remote mode incompatibility: " + e.getMessage(), e);
@@ -431,14 +504,69 @@ public class WebviewInitializer {
                 showErrorPanel();
             }
         } catch (Exception e) {
+            this.disposeFailedBrowser(browser);
             LOG.error("Failed to create UI components: " + e.getMessage(), e);
             showErrorPanel();
         } catch (LinkageError e) {
+            this.disposeFailedBrowser(browser);
             // Platform/JBR binary mismatch (e.g. Android Studio 2026.x whose
             // bundled JBR lacks JCefAppConfig.isRemoteEnabled()) throws Error,
             // not Exception - it must not crash the EDT with a blank panel.
             LOG.error("JCEF binary incompatibility: " + e.getMessage(), e);
             showJcefNotSupportedPanel();
+        }
+    }
+
+    private JBCefJSQuery.Response handleClipboardPathRequest() {
+        try {
+            LOG.debug("Clipboard path request received");
+            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+            Transferable contents = clipboard.getContents(null);
+
+            if (contents != null && contents.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) {
+                @SuppressWarnings("unchecked")
+                List<File> files = (List<File>) contents.getTransferData(DataFlavor.javaFileListFlavor);
+
+                if (!files.isEmpty()) {
+                    File file = files.get(0);
+                    String filePath = file.getAbsolutePath();
+                    LOG.debug("Returning file path from clipboard: " + filePath);
+                    return new JBCefJSQuery.Response(filePath);
+                }
+            }
+            LOG.debug("No file in clipboard");
+            return new JBCefJSQuery.Response("");
+        } catch (Exception ex) {
+            LOG.warn("Error getting clipboard path: " + ex.getMessage());
+            return new JBCefJSQuery.Response("");
+        }
+    }
+
+    private void disposeFailedBrowser(JBCefBrowser browser) {
+        if (browser == null) {
+            return;
+        }
+
+        BrowserBridges currentBridges;
+        synchronized (this.bridgeLock) {
+            currentBridges = this.bridges;
+            if (currentBridges != null && currentBridges.belongsTo(browser)) {
+                this.bridges = null;
+            } else {
+                currentBridges = null;
+            }
+        }
+        if (currentBridges != null) {
+            currentBridges.dispose();
+        }
+        if (this.host.getBrowser() == browser) {
+            this.host.setBrowser(null);
+            this.host.getHandlerContext().setBrowser(null);
+        }
+        try {
+            browser.dispose();
+        } catch (Exception | LinkageError e) {
+            LOG.warn("Failed to dispose browser after webview initialization error: " + e.getMessage(), e);
         }
     }
 
@@ -691,12 +819,16 @@ public class WebviewInitializer {
                         mainPanel.remove(browser.getComponent());
                     } catch (Exception ignored) {
                     }
+                    // Release the JS bridges before the browser itself so the
+                    // native callback handles do not outlive the browser.
+                    this.disposeBridges();
+                    host.getHandlerContext().setBrowser(null);
+                    host.setBrowser(null);
                     try {
                         browser.dispose();
-                    } catch (Exception e) {
+                    } catch (Exception | LinkageError e) {
                         LOG.debug("[WebviewWatchdog] Failed to dispose old browser: " + e.getMessage(), e);
                     }
-                    host.setBrowser(null);
                 }
 
                 LOG.info("[WebviewWatchdog] Recreating webview (" + reason + ")");
@@ -708,5 +840,87 @@ public class WebviewInitializer {
                 LOG.warn("[WebviewWatchdog] Recreate failed: " + e.getMessage(), e);
             }
         });
+    }
+
+    /**
+     * Release the JBCefJSQuery bridges.
+     * Must be called before the owning browser is disposed so the native
+     * callback handles do not outlive the browser.
+     */
+    public void disposeBridges() {
+        BrowserBridges currentBridges;
+        synchronized (this.bridgeLock) {
+            currentBridges = this.bridges;
+            this.bridges = null;
+        }
+        // Dispose outside the lock so the JCEF native teardown each query
+        // triggers does not stall other bridgeLock waiters (onLoadEnd, the
+        // generation checks in sibling handlers). Bridges == null above
+        // guarantees no new dispatch will race with the native query disposal
+        // that follows, and message handlers no longer hold bridgeLock while
+        // dispatching into the host.
+        if (currentBridges != null) {
+            currentBridges.dispose();
+        }
+    }
+
+    private static final class BrowserBridges {
+        private final JBCefBrowser browser;
+        private final JBCefJSQuery jsQuery;
+        private final JBCefJSQuery clipboardPathQuery;
+        private final JBCefJSQuery hidePanelQuery;
+
+        private BrowserBridges(JBCefBrowser browser) {
+            this.browser = browser;
+            JBCefJSQuery createdJsQuery = null;
+            JBCefJSQuery createdClipboardPathQuery = null;
+            JBCefJSQuery createdHidePanelQuery = null;
+            try {
+                JBCefBrowserBase browserBase = browser;
+                createdJsQuery = JBCefJSQuery.create(browserBase);
+                createdClipboardPathQuery = JBCefJSQuery.create(browserBase);
+                createdHidePanelQuery = JBCefJSQuery.create(browserBase);
+            } catch (RuntimeException | LinkageError e) {
+                disposeQueryQuietly(createdHidePanelQuery);
+                disposeQueryQuietly(createdClipboardPathQuery);
+                disposeQueryQuietly(createdJsQuery);
+                throw e;
+            }
+            this.jsQuery = createdJsQuery;
+            this.clipboardPathQuery = createdClipboardPathQuery;
+            this.hidePanelQuery = createdHidePanelQuery;
+        }
+
+        private boolean belongsTo(JBCefBrowser browser) {
+            return this.browser == browser;
+        }
+
+        private boolean isCurrentFor(JBCefBrowser browser) {
+            if (!this.belongsTo(browser)) {
+                return false;
+            }
+            try {
+                return !JBCefBrowserFactory.isBrowserClosed(browser.getCefBrowser());
+            } catch (Exception | LinkageError ignored) {
+                return false;
+            }
+        }
+
+        private void dispose() {
+            disposeQueryQuietly(this.hidePanelQuery);
+            disposeQueryQuietly(this.clipboardPathQuery);
+            disposeQueryQuietly(this.jsQuery);
+        }
+    }
+
+    private static void disposeQueryQuietly(JBCefJSQuery query) {
+        if (query == null) {
+            return;
+        }
+        try {
+            query.dispose();
+        } catch (Exception | LinkageError e) {
+            LOG.warn("Failed to dispose JBCefJSQuery: " + e.getMessage(), e);
+        }
     }
 }

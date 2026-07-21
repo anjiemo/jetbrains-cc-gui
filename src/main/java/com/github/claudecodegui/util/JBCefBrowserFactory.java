@@ -3,15 +3,18 @@ package com.github.claudecodegui.util;
 import com.intellij.openapi.application.ApplicationInfo;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.util.SystemInfo;
-import com.intellij.ui.jcef.JBCefApp;
 import com.intellij.ui.jcef.JBCefBrowser;
 import com.intellij.ui.jcef.JBCefBrowserBase;
 import com.intellij.ui.jcef.JBCefBrowserBuilder;
-import com.intellij.ui.jcef.JBCefClient;
 import org.cef.browser.CefBrowser;
 import org.cef.handler.CefKeyboardHandler;
 import org.cef.handler.CefKeyboardHandlerAdapter;
 import org.cef.misc.BoolRef;
+
+import java.lang.reflect.Method;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * JBCefBrowser factory.
@@ -27,6 +30,7 @@ public final class JBCefBrowserFactory {
 
     private static final Logger LOG = Logger.getInstance(JBCefBrowserFactory.class);
     private static final int CONTROL_CHAR_MAX = 0x1F;
+    private static final ConcurrentMap<Class<?>, Optional<Method>> IS_CLOSED_METHODS = new ConcurrentHashMap<>();
 
     /**
      * First platform baseline version (2026.1) whose JBCefApp initialization
@@ -60,8 +64,8 @@ public final class JBCefBrowserFactory {
                     .setOffScreenRendering(isOffScreenRendering)
                     .setEnableOpenDevToolsMenuItem(isDevMode);
                     // .setCreateImmediately(true) // Causes new tabs to permanently stall on "Checking SDK status..." - commented out; using default lazy-load mode instead
-            configureKeyboardWorkaround(builder);
             JBCefBrowser browser = builder.build();
+            configureKeyboardWorkaround(browser);
             configureContextMenu(browser, isDevMode);
             LOG.info("JBCefBrowser created successfully using builder");
             return browser;
@@ -95,8 +99,8 @@ public final class JBCefBrowserFactory {
                     .setEnableOpenDevToolsMenuItem(isDevMode)
                     .setCreateImmediately(true)
                     .setUrl(url);
-            configureKeyboardWorkaround(builder);
             JBCefBrowser browser = builder.build();
+            configureKeyboardWorkaround(browser);
             configureContextMenu(browser, isDevMode);
             LOG.info("JBCefBrowser created successfully with URL");
             return browser;
@@ -187,6 +191,43 @@ public final class JBCefBrowserFactory {
     }
 
     /**
+     * Checks whether a CEF browser is known to be closed.
+     *
+     * <p>The {@code CefBrowser.isClosed()} API is not available on every JCEF
+     * version supported by this plugin's 233+ platform range. Reflection keeps
+     * the guard optional: an older runtime without the method is treated as
+     * active, while invocation failures on runtimes that expose it are treated
+     * as closed.</p>
+     *
+     * @param browser the CEF browser to inspect.
+     * @return true when the browser is null, reports closed, or cannot be queried safely.
+     */
+    public static boolean isBrowserClosed(CefBrowser browser) {
+        if (browser == null) {
+            return true;
+        }
+        Optional<Method> method = IS_CLOSED_METHODS.computeIfAbsent(
+                browser.getClass(), JBCefBrowserFactory::findIsClosedMethod);
+        if (method.isEmpty()) {
+            return false;
+        }
+        try {
+            return Boolean.TRUE.equals(method.get().invoke(browser));
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+            LOG.debug("Failed to query JCEF browser closed state: " + e.getMessage(), e);
+            return true;
+        }
+    }
+
+    static Optional<Method> findIsClosedMethod(Class<?> browserClass) {
+        try {
+            return Optional.of(browserClass.getMethod("isClosed"));
+        } catch (NoSuchMethodException | SecurityException | LinkageError e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
      * Check whether JCEF is available.
      *
      * @return true if JCEF is supported
@@ -274,21 +315,16 @@ public final class JBCefBrowserFactory {
      * Workaround for Windows JCEF issue where IME composition and certain key combinations
      * generate control character events on non-editable fields, causing unwanted input in the chat area.
      */
-    private static void configureKeyboardWorkaround(JBCefBrowserBuilder builder) {
-        if (!SystemInfo.isWindows) {
-            return;
-        }
-        JBCefClient client = JBCefApp.getInstance().createClient();
-        client.getCefClient().addKeyboardHandler(createKeyboardWorkaroundHandler());
-        builder.setClient(client);
-        LOG.info("[JCEF] Installed pre-build keyboard workaround client");
-    }
-
     private static void configureKeyboardWorkaround(JBCefBrowser browser) {
         if (!SystemInfo.isWindows) {
             return;
         }
-        browser.getJBCefClient().addKeyboardHandler(createKeyboardWorkaroundHandler(), browser.getCefBrowser());
+        // Register via getCefClient().addKeyboardHandler rather than the
+        // JBCefClient.addKeyboardHandler convenience overload — the JCEF docs
+        // warn against the convenience methods. The browser's implicit client
+        // serves only this browser, so this matches the original pre-build
+        // behaviour without leaking a separately-created JBCefClient.
+        browser.getJBCefClient().getCefClient().addKeyboardHandler(createKeyboardWorkaroundHandler());
     }
 
     private static CefKeyboardHandler createKeyboardWorkaroundHandler() {

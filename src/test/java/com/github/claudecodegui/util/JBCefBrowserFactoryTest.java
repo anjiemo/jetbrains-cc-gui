@@ -99,6 +99,27 @@ public class JBCefBrowserFactoryTest {
     public static class JcefConfigWithoutRemoteApi {
     }
 
+    /** Mimics a newer JCEF browser implementation that exposes isClosed(). */
+    public static class BrowserWithClosedApi {
+        public boolean isClosed() {
+            return false;
+        }
+    }
+
+    /** Mimics a 233-era JCEF browser implementation without isClosed(). */
+    public static class BrowserWithoutClosedApi {
+    }
+
+    @Test
+    public void findsOptionalBrowserClosedApiWhenPresent() {
+        Assert.assertTrue(JBCefBrowserFactory.findIsClosedMethod(BrowserWithClosedApi.class).isPresent());
+    }
+
+    @Test
+    public void toleratesBrowserClosedApiMissingOnOlderPlatforms() {
+        Assert.assertTrue(JBCefBrowserFactory.findIsClosedMethod(BrowserWithoutClosedApi.class).isEmpty());
+    }
+
     @Test
     public void remoteApiNotRequiredOnPlatformsBefore2026() {
         Assert.assertFalse(JBCefBrowserFactory.isRemoteApiRequiredByPlatform(233));
