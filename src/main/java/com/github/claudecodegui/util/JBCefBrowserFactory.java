@@ -280,14 +280,13 @@ public final class JBCefBrowserFactory {
             BooleanSupplier remoteApiMissing,
             BooleanSupplier androidStudioPluginMissing
     ) {
-        boolean pluginMissing = androidStudioPluginMissing.getAsBoolean();
-        if (pluginMissing) {
-            return JcefSupportStatus.ANDROID_STUDIO_PLUGIN_MISSING;
-        }
         if (!registryEnabled) {
             return JcefSupportStatus.DISABLED_BY_REGISTRY;
         }
         if (!platformSupported.getAsBoolean()) {
+            if (androidStudioPluginMissing.getAsBoolean()) {
+                return JcefSupportStatus.ANDROID_STUDIO_PLUGIN_MISSING;
+            }
             return JcefSupportStatus.UNAVAILABLE;
         }
         if (remoteApiMissing.getAsBoolean()) {

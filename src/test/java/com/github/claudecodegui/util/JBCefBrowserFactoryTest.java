@@ -162,13 +162,31 @@ public class JBCefBrowserFactoryTest {
         Assert.assertEquals(JBCefBrowserFactory.JcefSupportStatus.DISABLED_BY_REGISTRY, status);
         Assert.assertFalse(platformChecked.get());
         Assert.assertFalse(remoteApiChecked.get());
-        Assert.assertTrue(pluginChecked.get());
+        Assert.assertFalse(pluginChecked.get());
+    }
+
+    @Test
+    public void platformSupportDoesNotRequireStandaloneJcefPlugin() {
+        AtomicBoolean pluginChecked = new AtomicBoolean(false);
+
+        JBCefBrowserFactory.JcefSupportStatus status = JBCefBrowserFactory.determineJcefSupport(
+                true,
+                () -> true,
+                () -> false,
+                () -> {
+                    pluginChecked.set(true);
+                    return true;
+                }
+        );
+
+        Assert.assertEquals(JBCefBrowserFactory.JcefSupportStatus.SUPPORTED, status);
+        Assert.assertFalse(pluginChecked.get());
     }
 
     @Test
     public void reportsMissingAndroidStudioJcefPlugin() {
         JBCefBrowserFactory.JcefSupportStatus status = JBCefBrowserFactory.determineJcefSupport(
-                false,
+                true,
                 () -> false,
                 () -> false,
                 () -> true

@@ -333,16 +333,10 @@ public class WebviewInitializer {
                         }
                         injection = "window.sendToJava = function(msg) { "
                                 + currentBridges.jsQuery.inject("msg") + " };";
-                        shiftEscInjection =
-                            "document.addEventListener('keydown', function(e) {" +
-                            "  if (e.key === 'Escape' && e.shiftKey) {" +
-                            "    e.preventDefault();" +
-                            "    e.stopPropagation();" +
-                            "    " + currentBridges.hidePanelQuery.inject("''",
-                                "function() {}",
-                                "function() {}") +
-                            "  }" +
-                            "}, true);";
+                        shiftEscInjection = buildShiftEscInjection(
+                                currentBridges.hidePanelQuery.inject("''",
+                                        "function() {}",
+                                        "function() {}"));
                         clipboardPathInjection =
                             "window.getClipboardFilePath = function() {" +
                             "  return new Promise((resolve) => {" +
@@ -384,53 +378,7 @@ public class WebviewInitializer {
                             cefBrowser.executeJavaScript(consoleForward, cefBrowser.getURL(), 0);
                         }
 
-                        // Pass IDEA editor font configuration to the frontend
-                        String fontConfig = FontConfigService.getEditorFontConfigJson();
-                        LOG.info("[FontSync] Retrieved font config: " + fontConfig);
-                        String fontConfigInjection = String.format(
-                            "if (window.applyIdeaFontConfig) { window.applyIdeaFontConfig(%s); } " +
-                            "else { window.__pendingFontConfig = %s; }",
-                            fontConfig, fontConfig
-                        );
-                        cefBrowser.executeJavaScript(fontConfigInjection, cefBrowser.getURL(), 0);
-                        LOG.info("[FontSync] Font config injected into frontend");
-
-                        // Pass effective plugin UI font configuration to the frontend
-                        String uiFontConfig = FontConfigService.getResolvedUiFontConfigJson(host.getHandlerContext().getSettingsService());
-                        LOG.info("[UiFontSync] Retrieved UI font config");
-                        String escapedUiFontConfig = JsUtils.escapeJs(uiFontConfig);
-                        String uiFontConfigInjection = String.format(
-                            "(function(){ var c = JSON.parse('%s'); " +
-                            "if (window.applyUiFontConfig) { window.applyUiFontConfig(c); } " +
-                            "else { window.__pendingUiFontConfig = c; } })()",
-                            escapedUiFontConfig
-                        );
-                        cefBrowser.executeJavaScript(uiFontConfigInjection, cefBrowser.getURL(), 0);
-                        LOG.info("[UiFontSync] UI font config injected into frontend");
-
-                        // Pass effective code font configuration to the frontend
-                        String codeFontConfig = FontConfigService.getResolvedCodeFontConfigJson(host.getHandlerContext().getSettingsService());
-                        LOG.info("[CodeFontSync] Retrieved code font config");
-                        String escapedCodeFontConfig = JsUtils.escapeJs(codeFontConfig);
-                        String codeFontConfigInjection = String.format(
-                            "(function(){ var c = JSON.parse('%s'); " +
-                            "if (window.applyCodeFontConfig) { window.applyCodeFontConfig(c); } " +
-                            "else { window.__pendingCodeFontConfig = c; } })()",
-                            escapedCodeFontConfig
-                        );
-                        cefBrowser.executeJavaScript(codeFontConfigInjection, cefBrowser.getURL(), 0);
-                        LOG.info("[CodeFontSync] Code font config injected into frontend");
-
-                        // Pass IDEA language configuration to the frontend
-                        String languageConfig = LanguageConfigService.getLanguageConfigJson(host.getHandlerContext().getSettingsService());
-                        LOG.info("[LanguageSync] Retrieved language config: " + languageConfig);
-                        String languageConfigInjection = String.format(
-                            "if (window.applyIdeaLanguageConfig) { window.applyIdeaLanguageConfig(%s); } " +
-                            "else { window.__pendingLanguageConfig = %s; }",
-                            languageConfig, languageConfig
-                        );
-                        cefBrowser.executeJavaScript(languageConfigInjection, cefBrowser.getURL(), 0);
-                        LOG.info("[LanguageSync] Language config injected into frontend");
+                        injectFrontendConfiguration(cefBrowser);
 
                         LOG.debug("onLoadEnd completed, waiting for frontend_ready signal");
                     } catch (Exception | LinkageError e) {
@@ -575,19 +523,10 @@ public class WebviewInitializer {
             }
             bridgeInjection = "window.sendToJava = function(msg) { "
                     + currentBridges.jsQuery.inject("msg") + " };";
-            shiftEscInjection =
-                    "if (!window.__ccgShiftEscInstalled) {" +
-                    "  window.__ccgShiftEscInstalled = true;" +
-                    "  document.addEventListener('keydown', function(e) {" +
-                    "    if (e.key === 'Escape' && e.shiftKey) {" +
-                    "      e.preventDefault();" +
-                    "      e.stopPropagation();" +
-                    "      " + currentBridges.hidePanelQuery.inject("''",
+            shiftEscInjection = buildShiftEscInjection(
+                    currentBridges.hidePanelQuery.inject("''",
                             "function() {}",
-                            "function() {}") +
-                    "    }" +
-                    "  }, true);" +
-                    "}";
+                            "function() {}"));
             clipboardPathInjection =
                     "window.getClipboardFilePath = function() {" +
                     "  return new Promise((resolve) => {" +
@@ -605,14 +544,7 @@ public class WebviewInitializer {
             cefBrowser.executeJavaScript(shiftEscInjection, url, 0);
             cefBrowser.executeJavaScript(clipboardPathInjection, url, 0);
 
-            String languageConfig = LanguageConfigService.getLanguageConfigJson(
-                    host.getHandlerContext().getSettingsService());
-            String languageConfigInjection = String.format(
-                    "if (window.applyIdeaLanguageConfig) { window.applyIdeaLanguageConfig(%s); } " +
-                    "else { window.__pendingLanguageConfig = %s; }",
-                    languageConfig, languageConfig
-            );
-            cefBrowser.executeJavaScript(languageConfigInjection, url, 0);
+            injectFrontendConfiguration(cefBrowser);
             if (attempt == 1) {
                 LOG.info("[JCEF] Executed first fallback bridge injection for remote-mode startup");
             }
@@ -621,6 +553,66 @@ public class WebviewInitializer {
             LOG.debug("Fallback bridge injection failed on attempt " + attempt + ": " + e.getMessage(), e);
             return attempt < BRIDGE_INJECTION_MAX_ATTEMPTS;
         }
+    }
+
+    static String buildShiftEscInjection(String hidePanelInvocation) {
+        return "if (!window.__ccgShiftEscInstalled) {" +
+                "  window.__ccgShiftEscInstalled = true;" +
+                "  document.addEventListener('keydown', function(e) {" +
+                "    if (e.key === 'Escape' && e.shiftKey) {" +
+                "      e.preventDefault();" +
+                "      e.stopPropagation();" +
+                "      " + hidePanelInvocation +
+                "    }" +
+                "  }, true);" +
+                "}";
+    }
+
+    static List<String> buildConfigurationInjections(
+            String editorFontConfig,
+            String uiFontConfig,
+            String codeFontConfig,
+            String languageConfig
+    ) {
+        String escapedUiFontConfig = JsUtils.escapeJs(uiFontConfig);
+        String escapedCodeFontConfig = JsUtils.escapeJs(codeFontConfig);
+        return List.of(
+                String.format(
+                        "if (window.applyIdeaFontConfig) { window.applyIdeaFontConfig(%s); } " +
+                                "else { window.__pendingFontConfig = %s; }",
+                        editorFontConfig, editorFontConfig),
+                String.format(
+                        "(function(){ var c = JSON.parse('%s'); " +
+                                "if (window.applyUiFontConfig) { window.applyUiFontConfig(c); } " +
+                                "else { window.__pendingUiFontConfig = c; } })()",
+                        escapedUiFontConfig),
+                String.format(
+                        "(function(){ var c = JSON.parse('%s'); " +
+                                "if (window.applyCodeFontConfig) { window.applyCodeFontConfig(c); } " +
+                                "else { window.__pendingCodeFontConfig = c; } })()",
+                        escapedCodeFontConfig),
+                String.format(
+                        "if (window.applyIdeaLanguageConfig) { window.applyIdeaLanguageConfig(%s); } " +
+                                "else { window.__pendingLanguageConfig = %s; }",
+                        languageConfig, languageConfig)
+        );
+    }
+
+    private void injectFrontendConfiguration(CefBrowser cefBrowser) {
+        String editorFontConfig = FontConfigService.getEditorFontConfigJson();
+        String uiFontConfig = FontConfigService.getResolvedUiFontConfigJson(
+                host.getHandlerContext().getSettingsService());
+        String codeFontConfig = FontConfigService.getResolvedCodeFontConfigJson(
+                host.getHandlerContext().getSettingsService());
+        String languageConfig = LanguageConfigService.getLanguageConfigJson(
+                host.getHandlerContext().getSettingsService());
+        String url = cefBrowser.getURL();
+
+        for (String injection : buildConfigurationInjections(
+                editorFontConfig, uiFontConfig, codeFontConfig, languageConfig)) {
+            cefBrowser.executeJavaScript(injection, url, 0);
+        }
+        LOG.info("[WebviewConfigSync] Frontend configuration injected");
     }
 
     private JBCefJSQuery.Response handleClipboardPathRequest() {
